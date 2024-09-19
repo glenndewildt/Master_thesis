@@ -1,3 +1,4 @@
 # Byte-compiled / optimized / DLL files
-breathing_prediction/src
+./breathing_prediction/src
 __pycache__/
+/breathing_prediction/results

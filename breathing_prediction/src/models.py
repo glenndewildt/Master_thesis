@@ -41,38 +41,27 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
     def forward(self, input_values):
 
         wav2vec2_outputs = self.wav2vec2(input_values)
-        print(f"Shape after wav2vec2: {wav2vec2_outputs[0].shape}")
         
         features = wav2vec2_outputs[0]
         x = features.permute(0, 2, 1)
-        print(f"Shape after permute: {x.shape}")
         
         x = self.conv(x)
-        print(f"Shape after conv: {x.shape}")
         
         x = self.relu(x)
-        print(f"Shape after relu: {x.shape}")
         
         x = x.permute(0, 2, 1)
-        print(f"Shape after second permute: {x.shape}")
         
         lstm_out, _ = self.lstm(x)
-        print(f"Shape after lstm: {lstm_out.shape}")
         
         last_time_step = lstm_out[:, -1, :]
-        print(f"Shape after selecting last time step: {last_time_step.shape}")
         
         embed = self.embedding(last_time_step)
-        print(f"Shape after embedding: {embed.shape}")
         
         output = self.output(embed)
-        print(f"Shape after output: {output.shape}")
         
         x = self.tanh(output)
-        print(f"Shape after tanh: {x.shape}")
         
         x = self.flatten(x)
-        print(f"Shape after flatten: {x.shape}")
         
         return x
     

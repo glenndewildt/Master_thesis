@@ -1,8 +1,7 @@
-import torch
 from torch.utils.data import Dataset
 import numpy as np
-from audiomentations import Compose, PitchShift
 import pickle
+from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift, Shift
 
 
 class AugmentedDataset(Dataset):

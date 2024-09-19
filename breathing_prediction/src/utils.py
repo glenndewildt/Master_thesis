@@ -16,6 +16,85 @@ from scipy.stats import pearsonr
 from tqdm import tqdm
 from sklearn.model_selection import KFold
 from audiomentations import Compose, PitchShift
+from dataset import *
+
+class EarlyStopping:
+    def __init__(self, patience=7, mode='min', delta=0):
+        self.patience = patience
+        self.counter = 0
+        self.mode = mode
+        self.best_score = None
+        self.early_stop = False
+        self.delta = delta
+
+    def __call__(self, score):
+        if self.mode == 'min':
+            score = -score
+        if self.best_score is None:
+            self.best_score = score
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.counter = 0
+        return self.early_stop
+    
+def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size):
+    # Load and prepare data
+    train_data, train_labels, train_dict, frame_rate = load_data(audio_interspeech_norm, breath_interspeech_folder, 'train')
+    devel_data, devel_labels, devel_dict, _ = load_data(audio_interspeech_norm, breath_interspeech_folder, 'devel')
+    test_data, test_labels, test_dict, _ = load_data(audio_interspeech_norm, breath_interspeech_folder, 'test')
+    
+    # Prepare data
+    prepared_train_data, prepared_train_labels, _ = prepare_data(train_data, train_labels, train_dict, frame_rate, window_size * 16000, step_size * 16000)
+    prepared_devel_data, prepared_devel_labels, _ = prepare_data(devel_data, devel_labels, devel_dict, frame_rate, window_size * 16000, step_size * 16000)
+    prepared_test_data, prepared_test_labels, _= prepare_data(test_data, test_labels, test_dict, frame_rate, window_size * 16000, step_size * 16000)
+
+    # Create custom datasets
+    train_dataset = CustomDataset(prepared_train_data, prepared_train_labels, train_dict)
+    val_dataset = CustomDataset(prepared_devel_data, prepared_devel_labels, devel_dict)
+    test_dataset = CustomDataset(prepared_test_data, prepared_test_labels, test_dict)
+
+    combined_train_data = np.concatenate((train_dataset.data, val_dataset.data), axis=0)
+    combined_train_labels = np.concatenate((train_dataset.labels, val_dataset.labels), axis=0)
+    combined_train_dict = np.concatenate((train_dataset.name, val_dataset.name), axis=0)
+    combined_train_data, combined_train_labels = flatten_data_for_model(combined_train_data, combined_train_labels)
+    combined_train_dataset = CustomDataset(combined_train_data, combined_train_labels, [])
+
+    return combined_train_dataset, test_dataset
+    
+# def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size, fold):
+#     # Load and prepare data
+#     train_data, train_labels, train_dict, frame_rate = load_data(audio_interspeech_norm, breath_interspeech_folder, 'train')
+#     devel_data, devel_labels, devel_dict, _ = load_data(audio_interspeech_norm, breath_interspeech_folder, 'devel')
+#     test_data, test_labels, test_dict, _ = load_data(audio_interspeech_norm, breath_interspeech_folder, 'test')
+    
+#     # Prepare data
+#     prepared_train_data, prepared_train_labels, _ = prepare_data(train_data, train_labels, train_dict, frame_rate, window_size * 16000, step_size * 16000)
+#     prepared_devel_data, prepared_devel_labels, _ = prepare_data(devel_data, devel_labels, devel_dict, frame_rate, window_size * 16000, step_size * 16000)
+#     prepared_test_data, prepared_test_labels, _= prepare_data(test_data, test_labels, test_dict, frame_rate, window_size * 16000, step_size * 16000)
+
+#     # Create custom datasets
+#     train_dataset = CustomDataset(prepared_train_data, prepared_train_labels, train_dict)
+#     val_dataset = CustomDataset(prepared_devel_data, prepared_devel_labels, devel_dict)
+#     test_dataset = CustomDataset(prepared_test_data, prepared_test_labels, test_dict)
+#     train_dataset.print_shapes()
+#     val_dataset.print_shapes()
+#     number_of_test_samples = int((len(val_dataset) + len(train_dataset))/ fold)
+#     print(number_of_test_samples)
+#     new_val_dataset_item = val_dataset.pop_first_n(number_of_test_samples)
+#     new_val_dataset = CustomDataset(new_val_dataset_item[0], new_val_dataset_item[1], new_val_dataset_item[2])
+#     new_val_dataset.print_shapes()
+
+#     combined_train_data = np.concatenate((train_dataset.data, val_dataset.data), axis=0)
+#     combined_train_labels = np.concatenate((train_dataset.labels, val_dataset.labels), axis=0)
+#     combined_train_dict = np.concatenate((train_dataset.name, val_dataset.name), axis=0)
+#     combined_train_data, combined_train_labels = flatten_data_for_model(combined_train_data, combined_train_labels)
+#     combined_train_dataset = CustomDataset(combined_train_data, combined_train_labels, [])
+
+#     return combined_train_dataset, new_val_dataset, test_dataset
 
 def load_data(path_to_data, path_to_labels, prefix):
     # labels

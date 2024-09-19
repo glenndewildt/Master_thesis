@@ -52,8 +52,8 @@ class Config:
     min_lr = 1e-5
 
     # Logging and saving
-    log_dir = "logs"
-    model_save_dir = "models"
+    log_dir = "../results/logs"
+    model_save_dir = "../results/models"
 
     # BERT configuration
     bert_model = "facebook/hubert-base-ls960"

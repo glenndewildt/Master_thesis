@@ -18,9 +18,12 @@ from utils import *
 from losses import *
 from dataset import *
 from config import Config
+from torchviz import make_dot
+
 
 class Trainer:
-    def __init__(self, config, model_classes, criterion, device, bert_config):
+    def __init__(self, config, model_classes, criterion, device, bert_config, ground_labels):
+        self.ground_labels = ground_labels
         self.config = config
         self.model_classes = model_classes
         self.criterion = criterion
@@ -50,10 +53,10 @@ class Trainer:
             model_results = []
             
             writer = SummaryWriter(os.path.join(self.run_dir, f"{model_name}"))
-            
+            self.writer = writer
             for fold, (train_idx, val_idx) in enumerate(kfold.split(train_data)):
                 print(f"Fold {fold + 1}/{self.config.n_folds}")
-                
+
                 train_sampler = SubsetRandomSampler(train_idx)
                 val_sampler = SubsetRandomSampler(val_idx)
                 
@@ -70,13 +73,16 @@ class Trainer:
                 
                 best_val_loss = float('inf')
                 best_model_path = None
-                
+                early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
                 for epoch in range(self.config.epochs):
+
                     train_loss, train_acc = self._train_epoch(model, train_loader, optimizer, scheduler, epoch, self.config.epochs)
-                    val_loss, val_acc = self._evaluate(model, val_loader)
-                    test_loss, test_acc = self._evaluate(model, test_loader)
                     
-                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold)
+                    val_loss, val_acc , val_flat_acc = self._evaluate(model, val_loader)
+                    test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader)
+
+                    
+                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc)
                     
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
@@ -85,7 +91,9 @@ class Trainer:
                         best_model_path = os.path.join(self.run_dir, f"{model_name}_best_model_fold_{fold}.pt")
                         torch.save(model.state_dict(), best_model_path)
                     
-                    if self._early_stopping(val_loss):
+
+                                # Early stopping
+                    if early_stopping.step(val_loss):
                         print(f"Early stopping triggered for {model_name} at epoch {epoch+1}")
                         break
                 
@@ -96,11 +104,11 @@ class Trainer:
                     'test_acc': test_acc
                 })
                 
-                self._log_to_csv(model_name, fold, best_val_loss, test_loss, test_acc)
+                #self._log_to_csv(model_name, fold, best_val_loss, test_loss, test_acc)
             
             avg_results = self._calculate_average_results(model_results)
             self._log_average_results(writer, avg_results)
-            self._log_to_csv(model_name, 'Average', avg_results['best_val_loss'], avg_results['test_loss'], avg_results['test_acc'])
+            #self._log_to_csv(model_name, 'Average', avg_results['best_val_loss'], avg_results['test_loss'], avg_results['test_acc'])
             
             writer.close()
             self._print_model_results(model_name, model_results, avg_results)
@@ -110,17 +118,26 @@ class Trainer:
         total_loss = 0.0
         total_acc = 0.0
         
+        input_values, labels = flatten_and_shuffle_data(dataloader)
+        train_dataset = CustomDataset(input_values, labels, [])
+        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)   
+        l = len(dataloader.dataset)
+            
         progress_bar = tqdm(dataloader, desc=f"Training Epoch {epoch+1}/{total_epochs}")
-        
-        for batch_idx, (input_values, labels, _) in enumerate(progress_bar):
-            optimizer.zero_grad()
+        i = 0
 
+        for batch_idx, (input_values, labels, _) in enumerate(progress_bar):
+
+            optimizer.zero_grad()
             input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000).input_values
-            input_values = input_values.reshape(input_values.shape[0], input_values.shape[-1])
+            input_values = input_values.reshape(input_values.shape[1], input_values.shape[-1])
             input_values, labels = input_values.to(self.device), labels.to(self.device)
+          
             predictions = model(input_values)
             loss = self.criterion(predictions.float(), labels.float())
-            
+            if i == 0:
+                make_dot(predictions, params=dict(model.named_parameters())).render("model", format="png")
+                i =1  
             loss.backward()
             optimizer.step()
             scheduler.step(epoch + batch_idx / len(dataloader))
@@ -135,7 +152,7 @@ class Trainer:
         
         return total_loss / len(dataloader), total_acc / len(dataloader)
 
-    def _evaluate(self, model, dataloader, dataset):
+    def _evaluate(self, model, dataloader):
         model.eval()
         total_loss = 0.0
         total_acc = 0.0
@@ -144,10 +161,10 @@ class Trainer:
         with torch.no_grad():
             for input_values, labels, ground_truth_names in dataloader:
                 input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000).input_values
-                input_values = input_values.reshape(input_values.shape[0], input_values.shape[-1])
+                input_values = input_values.reshape(input_values.shape[1],input_values.shape[2], input_values.shape[-1])
                 input_values, labels = input_values.to(self.device), labels.to(self.device)
                                 
-                ground_truth_labels = self._get_ground_truth_labels(ground_truth_names, dataset)
+                ground_truth_labels = self._get_ground_truth_labels(ground_truth_names)
                 
                 predictions = self._process_sequences(model, input_values)
                 loss = self.criterion(predictions, labels)
@@ -155,20 +172,25 @@ class Trainer:
                 total_loss += loss.item()
                 total_acc += 1.0 - loss.item() 
                 
-                average = self._unsplit_data_ogsize(predictions.cpu().numpy(), dataset.window_size, dataset.step_size, dataset.data_points_per_second, ground_truth_labels.shape[-1])
+                average = self._unsplit_data_ogsize(predictions.cpu().numpy(), self.config.window_size, self.config.step_size, self.config.data_points_per_second, ground_truth_labels.shape[-1])
                 total_acc_flat += self._calculate_flattened_accuracy(average, ground_truth_labels)
                 
                 del input_values, labels, predictions, loss
                 torch.cuda.empty_cache()
         
         num_samples = len(dataloader.dataset)
-        return total_loss / num_samples, total_acc / num_samples, total_acc_flat / num_samples
 
-    def _get_ground_truth_labels(self, ground_truth_names, dataset):
+        avg_loss, avg_acc, avg_flat_acc = total_loss / num_samples, total_acc / num_samples, total_acc_flat / num_samples
+        print(f"val loss {avg_loss}, val_acc {avg_acc} , val_flat_acc, {avg_flat_acc}" )
+        return avg_loss, avg_acc, avg_flat_acc 
+
+
+    def _get_ground_truth_labels(self, ground_truth_names):
         ground_truth_labels = []
         for batch_name in ground_truth_names:
-            ground_truth_label = dataset.choose_real_labs_only_with_filenames([batch_name])
+            ground_truth_label = self._choose_real_labs_only_with_filenames(self.ground_labels, [batch_name])
             ground_truth_labels.append(ground_truth_label)
+            
         return np.array(ground_truth_labels)[:, :, -1].astype(np.float32)
 
     def _process_sequences(self, model, input_values):
@@ -185,16 +207,19 @@ class Trainer:
             s, _ = scipy.stats.pearsonr(average[b], ground_truth_labels[b])
             s_acc += s
         return s_acc / len(ground_truth_labels)
+    
+    def _choose_real_labs_only_with_filenames(self, labels, filenames):
+        return labels[labels['filename'].isin(filenames)]
 
-    def _unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_second, original_length):
+    def _unsplit_data_ogsize(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
         batch_size, num_windows, prediction_size = windowed_data.shape
         window_size_points = window_size * data_points_per_second
         step_size_points = step_size * data_points_per_second
         original_data = np.zeros((batch_size, original_length))
         overlap_count = np.zeros((batch_size, original_length))
         
-        for b in range(batch_size):
-            for i in range(num_windows):
+        for b in range(0,batch_size ):
+            for i in range(0,num_windows):
                 start = i * step_size_points
                 end = start + window_size_points
                 if end > original_length:
@@ -211,14 +236,16 @@ class Trainer:
         
         return original_data
     
-    def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold):
+    def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc):
         writer.add_scalar(f'Loss/train/fold_{fold}', train_loss, epoch)
         writer.add_scalar(f'Loss/val/fold_{fold}', val_loss, epoch)
         writer.add_scalar(f'Loss/test/fold_{fold}', test_loss, epoch)
         writer.add_scalar(f'Accuracy/train/fold_{fold}', train_acc, epoch)
         writer.add_scalar(f'Accuracy/val/fold_{fold}', val_acc, epoch)
         writer.add_scalar(f'Accuracy/test/fold_{fold}', test_acc, epoch)
-        
+        writer.add_scalar(f'Accuracy_flat/test/fold_{fold}', test_flat_acc, epoch)
+        writer.add_scalar(f'Accuracy_flat/val/fold_{fold}', val_flat_acc, epoch)
+
     def _calculate_average_results(self, model_results):
         avg_best_val_loss = np.mean([r['best_val_loss'] for r in model_results])
         avg_test_loss = np.mean([r['test_loss'] for r in model_results])

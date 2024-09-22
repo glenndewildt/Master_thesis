@@ -19,27 +19,24 @@ from audiomentations import Compose, PitchShift
 from dataset import *
 
 class EarlyStopping:
-    def __init__(self, patience=7, mode='min', delta=0):
+    def __init__(self, patience=30, mode='min'):
         self.patience = patience
-        self.counter = 0
         self.mode = mode
-        self.best_score = None
-        self.early_stop = False
-        self.delta = delta
+        self.best_score = float('inf') if mode == 'min' else -float('inf')
+        self.counter = 0
 
-    def __call__(self, score):
-        if self.mode == 'min':
-            score = -score
-        if self.best_score is None:
-            self.best_score = score
-        elif score < self.best_score + self.delta:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = score
+    def step(self, current_score):
+        if (self.mode == 'min' and current_score < self.best_score) or (self.mode == 'max' and current_score > self.best_score):
+            self.best_score = current_score
             self.counter = 0
-        return self.early_stop
+        else:
+            self.counter += 1
+
+        if self.counter >= self.patience:
+            print(f"Early stopping triggered after {self.counter} epochs without improvement.")
+            return True
+        return False
+
     
 def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size):
     # Load and prepare data
@@ -60,10 +57,9 @@ def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window
     combined_train_data = np.concatenate((train_dataset.data, val_dataset.data), axis=0)
     combined_train_labels = np.concatenate((train_dataset.labels, val_dataset.labels), axis=0)
     combined_train_dict = np.concatenate((train_dataset.name, val_dataset.name), axis=0)
-    combined_train_data, combined_train_labels = flatten_data_for_model(combined_train_data, combined_train_labels)
-    combined_train_dataset = CustomDataset(combined_train_data, combined_train_labels, [])
-
-    return combined_train_dataset, test_dataset
+    combined_train_dataset = CustomDataset(combined_train_data, combined_train_labels, combined_train_dict)
+    all_labels = pd.concat([test_labels, pd.concat([devel_labels, train_labels], axis=0)], axis=0)
+    return combined_train_dataset, test_dataset, all_labels
     
 # def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size, fold):
 #     # Load and prepare data
@@ -173,11 +169,8 @@ def how_many_windows_do_i_need(length_sequence, window_size, step):
 
 
 def flatten_data_for_model(data, labels):
-        # Assuming 'data' and 'labels' are your tensors with shapes [batch, seq_length, features]
-    # Flatten the data and labels by combining the first two dimensions
-
-    data_flattened = data.reshape(-1, data.shape[2])
-    labels_flattened = labels.reshape(-1, labels.shape[2])
+    data_flattened = data.reshape(-1, data.shape[-1])
+    labels_flattened = labels.reshape(-1, labels.shape[-1])
     return data_flattened, labels_flattened
 
 
@@ -189,6 +182,30 @@ def reshaping_data_for_model_test(data, labels):
 
 
 
+def combine_last_two_dimensions(tensor):
+    tensor = tensor.reshape(-1, tensor.shape[-1])
+    return tensor
+
+def flatten_and_shuffle_data(dataloader):
+    all_inputs = []
+    all_labels = []
+    
+    for inputs, labels, _ in dataloader:
+        combined_inputs = combine_last_two_dimensions(inputs)
+        combined_labels = combine_last_two_dimensions(labels)
+        
+        all_inputs.append(combined_inputs)
+        all_labels.append(combined_labels)
+    
+    all_inputs = torch.cat(all_inputs)
+    all_labels = torch.cat(all_labels)
+    
+    # Shuffle the data
+    indices = torch.randperm(all_inputs.size(0))
+    all_inputs = all_inputs[indices]
+    all_labels = all_labels[indices]
+    
+    return all_inputs, all_labels
 
 def prepare_data(data, labels, class_to_filename_dict, frame_rate, size_window, step_for_window):
     label_rate = 25  # 25 Hz label rate

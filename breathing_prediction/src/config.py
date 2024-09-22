@@ -5,14 +5,15 @@ class Config:
     audio_interspeech_norm = "/home/glenn/Downloads/ComParE2020_Breathing/wav/"
     breath_interspeech_folder = "/home/glenn/Downloads/ComParE2020_Breathing/lab/"
     window_size = 32
-    step_size = 4
-    n_folds = 5
+    step_size = 16
+    n_folds = 2
     device = "cuda"
+    data_points_per_second = 25
 
     # Model parameters
     models = {
         "VRBModel": {
-            "model_name": "facebook/hubert-large-ls960",
+            "model_name": "facebook/hubert-large-ls960-ft",
             "hidden_units": 64,
             "n_gru": 3,
             "output_size": None  # Will be set dynamically
@@ -24,22 +25,20 @@ class Config:
             "output_size": None  # Will be set dynamically
         },
         "RespBertLSTMModel": {
-            "bert_config": "wav2vec2",
             "hidden_units": 128,
             "n_lstm": 2,
-            "output": None  # Will bclass e set dynamically
+            "output_size": None  # Will bclass e set dynamically
         },
         "RespBertAttionModel": {
-            "bert_config": "hubert",
             "hidden_units": 128,
             "n_attion": 1,
-            "output": None  # Will be set dynamically
+            "output_size": None  # Will be set dynamically
         }
     }
 
     # Training parameters
-    epochs = 1
-    batch_size = 1
+    epochs = 3
+    batch_size = 2
     patience = 50
     learning_rate = 1e-4
     weight_decay = 1e-2

@@ -14,6 +14,36 @@ import math
 import json
   
 
+#1DCNN COMPARE PAPER
+class Model1DCNN(nn.Module):
+    def __init__(self, bert_config = None,config = None):
+        super(Model1DCNN, self).__init__()
+        layers = []
+        in_channels = config['in_channels']
+        for layer_config in config['conv_layers']:
+            layers.append(nn.Conv1d(in_channels, layer_config['out_channels'], kernel_size=layer_config['kernel_size'], stride=layer_config['stride']))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(config['dropout_rate']))
+            if 'pool_size' in layer_config:
+                layers.append(nn.MaxPool1d(kernel_size=layer_config['pool_size']))
+            in_channels = layer_config['out_channels']
+        #layers.append(nn.Flatten())
+        self.cnn = nn.Sequential(*layers)
+        self.lstm = nn.LSTM(input_size=layer_config['out_channels'], hidden_size=config['lstm_hidden_size'], num_layers=config['n_lstm'], batch_first=True)
+        self.dense = nn.Linear(config['lstm_hidden_size'], config['output_size'])
+        self.flatten = nn.Flatten()
+
+    def forward(self, x):
+        x = x.reshape(x.shape[0], 1 , x.shape[-1])
+        x = self.cnn(x)
+        x = x.permute(0,2,1)
+        x, _ = self.lstm(x)
+        x = x[:, -1, :]
+        x = self.dense(x)
+        x = self.flatten(x)
+        return x
+
+
 
 
 ##BASED IN APPLE PAPER
@@ -29,7 +59,7 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
         self.conv = nn.Conv1d(in_channels=self.input_features,
                               out_channels=self.input_features,
                               kernel_size=3,
-                              padding=1)       
+                              padding=1, dilation = 1)       
         self.relu = nn.ReLU() 
         self.lstm = nn.LSTM(input_size=self.input_features,
                             hidden_size=config['hidden_units'],
@@ -50,18 +80,12 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
                 param.requires_grad = True
 
     def forward(self, input_values):
-
-        wav2vec2_outputs = self.wav2vec2(input_values)
-        
+        wav2vec2_outputs = self.wav2vec2(input_values)     
         features = wav2vec2_outputs[0]
-        x = features.permute(0, 2, 1)
-        
-        x = self.conv(x)
-        
-        x = self.relu(x)
-        
-        x = x.permute(0, 2, 1)
-        
+        x = features.permute(0, 2, 1)       
+        x = self.conv(x)       
+        x = self.relu(x)       
+        x = x.permute(0, 2, 1)      
         lstm_out, _ = self.lstm(x)
         
         last_time_step = lstm_out[:, -1, :]
@@ -70,9 +94,9 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
         
         output = self.output(embed)
         
-        x = self.tanh(output)
+        #x = self.tanh(output) not used in apple paper
         
-        x = self.flatten(x)
+        x = self.flatten(output)
         
         return x
     

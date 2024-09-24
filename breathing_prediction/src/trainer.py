@@ -33,6 +33,12 @@ class Trainer:
         self.processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-large-960h")
         self.csv_file = os.path.join(self.run_dir, "results_summary.csv")
         self._create_csv_file()
+        
+    def _log_to_csv(self, model_name, fold, best_val_loss, test_loss, test_acc):
+        with open(self.csv_file, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([model_name, fold, best_val_loss, test_loss, test_acc])
+
 
     def _create_run_directory(self):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -104,11 +110,11 @@ class Trainer:
                     'test_acc': test_acc
                 })
                 
-                #self._log_to_csv(model_name, fold, best_val_loss, test_loss, test_acc)
+                self._log_to_csv(model_name, fold, best_val_loss, test_loss, test_acc)
             
             avg_results = self._calculate_average_results(model_results)
             self._log_average_results(writer, avg_results)
-            #self._log_to_csv(model_name, 'Average', avg_results['best_val_loss'], avg_results['test_loss'], avg_results['test_acc'])
+            self._log_to_csv(model_name, 'Average', avg_results['best_val_loss'], avg_results['test_loss'], avg_results['test_acc'])
             
             writer.close()
             self._print_model_results(model_name, model_results, avg_results)
@@ -136,7 +142,7 @@ class Trainer:
             predictions = model(input_values)
             loss = self.criterion(predictions.float(), labels.float())
             if i == 0:
-                make_dot(predictions, params=dict(model.named_parameters())).render("model", format="png")
+                #make_dot(predictions, params=dict(model.named_parameters())).render("model", format="png")
                 i =1  
             loss.backward()
             optimizer.step()
@@ -178,7 +184,7 @@ class Trainer:
                 del input_values, labels, predictions, loss
                 torch.cuda.empty_cache()
         
-        num_samples = len(dataloader.dataset)
+        num_samples = len(dataloader)
 
         avg_loss, avg_acc, avg_flat_acc = total_loss / num_samples, total_acc / num_samples, total_acc_flat / num_samples
         print(f"val loss {avg_loss}, val_acc {avg_acc} , val_flat_acc, {avg_flat_acc}" )

@@ -1,17 +1,18 @@
 from torch.utils.data import Dataset
 import numpy as np
 import pickle
-from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift, Shift
-
+import torchaudio
+import torchaudio.transforms as T
 
 class AugmentedDataset(Dataset):
-    def __init__(self, data, labels, augment=True):
+    def __init__(self, data, labels, augment=True, sample_rate=16000):
         self.data = data
         self.labels = labels
         self.augment = augment
-        self.augmenter = Compose([
-            #AddGaussianNoise(min_amplitude=0.001, max_amplitude=0.015, p=0.1),
-            PitchShift(min_semitones=-4, max_semitones=4, p=0.001),
+        self.sample_rate = sample_rate
+        self.augmentations = T.Compose([
+            T.AdditiveNoise(noise_factor=0.005),
+            T.PitchShift(sample_rate=sample_rate, n_steps=2),
         ])
 
     def __len__(self):
@@ -26,10 +27,11 @@ class AugmentedDataset(Dataset):
 
         return signal, label
 
-
     def apply_augmentation(self, signal):
-        signal = self.augmenter(samples=signal, sample_rate=16000)
+        signal = self.augmentations(signal)
         return signal
+
+
 
 class CustomDataset:
     def __init__(self, data, labels, name):

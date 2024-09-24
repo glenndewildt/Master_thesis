@@ -2,8 +2,11 @@
 
 class Config:
     # Data parameters
-    audio_interspeech_norm = "/home/glenn/Downloads/ComParE2020_Breathing/wav/"
-    breath_interspeech_folder = "/home/glenn/Downloads/ComParE2020_Breathing/lab/"
+    home = "/home/glenn/Downloads"
+    #home = "/home/gdwildt/Master_thesis/DATA"
+
+    audio_interspeech_norm = home+"/ComParE2020_Breathing/wav/"
+    breath_interspeech_folder = home+"/ComParE2020_Breathing/lab/"
     window_size = 16
     step_size = 4
     n_folds = 5

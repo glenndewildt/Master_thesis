@@ -136,7 +136,7 @@ class Trainer:
             predictions = model(input_values)
             loss = self.criterion(predictions.float(), labels.float())
             if i == 0:
-                make_dot(predictions, params=dict(model.named_parameters())).render("model", format="png")
+                #make_dot(predictions, params=dict(model.named_parameters())).render("model", format="png")
                 i =1  
             loss.backward()
             optimizer.step()
@@ -178,7 +178,7 @@ class Trainer:
                 del input_values, labels, predictions, loss
                 torch.cuda.empty_cache()
         
-        num_samples = len(dataloader.dataset)
+        num_samples = len(dataloader)
 
         avg_loss, avg_acc, avg_flat_acc = total_loss / num_samples, total_acc / num_samples, total_acc_flat / num_samples
         print(f"val loss {avg_loss}, val_acc {avg_acc} , val_flat_acc, {avg_flat_acc}" )

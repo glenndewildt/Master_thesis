@@ -1,3 +1,7 @@
 {
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "git.user.name": "Glenn",
+    "git.user.email": "glenndewildt@gmail.com"
+
+
 }

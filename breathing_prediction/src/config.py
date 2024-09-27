@@ -2,8 +2,8 @@
 
 class Config:
     # Data parameters
-    home = "/home/glenn/Downloads"
-    #home = "../../DATA"
+    #home = "/home/glenn/Downloads"
+    home = "../../DATA"
 
     audio_interspeech_norm = home+"/ComParE2020_Breathing/wav/"
     breath_interspeech_folder = home+"/ComParE2020_Breathing/lab/"
@@ -15,7 +15,7 @@ class Config:
     
     ## Train parameters
     epochs = 100
-    batch_size = 1
+    batch_size = 7
     patience = 15
     learning_rate = 1e-4
     weight_decay = 1e-4
@@ -71,7 +71,7 @@ class Config:
             "output_size": None  
         },
         "RespBertAttionModel": {
-            "model_name": "patrickvonplaten/wavlm-libri-clean-100h-base-plus",
+            "model_name": "microsoft/wavlm-large",
             "hidden_units": 128,
             "n_attion": 1,
             "output_size": None  

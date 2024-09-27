@@ -14,7 +14,8 @@ from transformers import (
     AutoConfig,
     AutoModelForAudioClassification,
     AutoModel,
-    AutoProcessor
+    AutoProcessor,
+    Wav2Vec2FeatureExtractor
 )
 import math
 import json
@@ -168,7 +169,7 @@ class RespBertAttionModel(nn.Module):
 
         self.wav_model = AutoModel.from_pretrained(config["model_name"])
 
-        self.wav_model.encoder.layers = self.wav_model.encoder.layers[0:2]
+        self.wav_model.encoder.layers = self.wav_model.encoder.layers[0:-7]
 
         self.d_model = bert_config.hidden_size
         self.features = config['hidden_units']
@@ -176,12 +177,12 @@ class RespBertAttionModel(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(self.transformer_layer, num_layers=config['n_attion'])
 
         self.time_downsample = nn.Sequential(
-            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
-            nn.BatchNorm1d(self.features),  
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
             nn.GELU(),
             nn.Dropout(0.2),
 
-            nn.Conv1d(self.features, self.features, kernel_size=3, padding=1),
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
             nn.BatchNorm1d(self.features),  
             nn.GELU(),            
             nn.AdaptiveAvgPool1d(self.output)  
@@ -194,7 +195,7 @@ class RespBertAttionModel(nn.Module):
         self.tanh_va = nn.Tanh()
         self.flatten = nn.Flatten()      
         #self.init_weights()
-        #self.unfreeze_last_n_blocks(4)
+        self.unfreeze_last_n_blocks(4)
                 
     def freeze_conv_only(self):
         for param in self.wav_model.parameters():

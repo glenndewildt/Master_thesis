@@ -59,7 +59,7 @@ class Trainer:
             #writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
 
     def train(self, train_data, test_data):
-        kfold = KFold(n_splits=self.config.n_folds, shuffle=True)
+        kfold = KFold(n_splits=self.config.n_folds, shuffle=True, random_state= 42)
         
         for model_name, model_class in self.model_classes.items():
             print(f"Training {model_name}...")
@@ -73,18 +73,18 @@ class Trainer:
                 train_sampler = SubsetRandomSampler(train_idx)
                 val_sampler = SubsetRandomSampler(val_idx)
                 self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)
-                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
+                #val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
 
-                train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler)
-                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
-                test_loader = DataLoader(test_data, batch_size=1)
+                train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler,num_workers=8)
+                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler,num_workers=8)
+                test_loader = DataLoader(test_data, batch_size=self.config.batch_size, num_workers=8)
 
                 model_config = self.config.models[model_name]
                 model_config['output_size'] = train_data.get_output_shape()
 
                 model = model_class(bert_config=self.bert_config, config=model_config).to(self.device)
                 #Load from path
-                #model.load_state_dict(torch.load("../results/logs/run_20240926_152058/RespBertAttionModel_best_model_fold_0.pt", map_location=self.device))
+                #model.load_state_dict(torch.load("../results/logs/run_20240927_211705/RespBertAttionModel_best_model_fold_0.pt", map_location=self.device))
 
                 optimizer = AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
                 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)
@@ -94,12 +94,12 @@ class Trainer:
                 early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
                 for epoch in range(self.config.epochs):
 
-                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer, scheduler, epoch, self.config.epochs)
-                    
+
+                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer, epoch, self.config.epochs)
                     val_loss, val_acc , val_flat_acc = self._evaluate(model, val_loader)
                     test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader)
 
-                    
+                    scheduler.step()
                     self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc)
                     
                     if val_loss < best_val_loss:
@@ -131,7 +131,7 @@ class Trainer:
             writer.close()
             self._print_model_results(model_name, model_results, avg_results)
 
-    def _train_epoch(self, model, dataloader, optimizer, scheduler, epoch, total_epochs):
+    def _train_epoch(self, model, dataloader, optimizer, epoch, total_epochs):
         model.train()
         total_loss = 0.0
         total_acc = 0.0
@@ -186,7 +186,7 @@ class Trainer:
                 ground_truth_labels = self._get_ground_truth_labels(ground_truth_names)
                 
                 predictions = self._process_sequences(model, input_values)
-                loss = self.criterion(predictions, labels)
+                loss = self.criterion(predictions.to("cpu"), labels)
                 
                 total_loss += loss.item()
                 total_acc += 1.0 - loss.item() 
@@ -215,11 +215,12 @@ class Trainer:
     def _process_sequences(self, model, input_values):
         predictions = []
         for i in range(input_values.size(1)):
-            input_values = input_values[:, i, :]
-            input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000)
-            input_values, labels = input_values.to(self.device), labels.to(self.device)
+            slice_input = input_values[:, i, :]
+            slice_input = np.stack(slice_input, axis=0)
+            slice_input = self.processor(slice_input, return_tensors="pt", padding="longest", sampling_rate = 16000)
+            slice_input = slice_input.to(self.device)
                  
-            pred = model(input_values)
+            pred = model(slice_input)
             predictions.append(pred)
         return torch.stack(predictions, dim=1)
 

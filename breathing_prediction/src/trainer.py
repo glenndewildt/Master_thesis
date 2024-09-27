@@ -73,7 +73,8 @@ class Trainer:
                 train_sampler = SubsetRandomSampler(train_idx)
                 val_sampler = SubsetRandomSampler(val_idx)
                 self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)
-                
+                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
+
                 train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler)
                 val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
                 test_loader = DataLoader(test_data, batch_size=1)
@@ -83,7 +84,7 @@ class Trainer:
 
                 model = model_class(bert_config=self.bert_config, config=model_config).to(self.device)
                 #Load from path
-                model.load_state_dict(torch.load("../results/logs/run_20240926_152058/RespBertAttionModel_best_model_fold_0.pt", map_location=self.device))
+                #model.load_state_dict(torch.load("../results/logs/run_20240926_152058/RespBertAttionModel_best_model_fold_0.pt", map_location=self.device))
 
                 optimizer = AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
                 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)
@@ -144,10 +145,14 @@ class Trainer:
         i = 0
 
         for batch_idx, (input_values, labels) in enumerate(progress_bar):
+            s = input_values.shape
 
             optimizer.zero_grad()
-            input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000).input_values
-            input_values = input_values.reshape(input_values.shape[1], input_values.shape[-1])
+            input_values = np.stack(input_values, axis= 0)
+
+            input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000)
+
+            #input_values = input_values.reshape(input_values.shape[1], input_values.shape[-1])
             input_values, labels = input_values.to(self.device), labels.to(self.device)
           
             predictions = model(input_values)
@@ -177,10 +182,7 @@ class Trainer:
         
         with torch.no_grad():
             for input_values, labels, ground_truth_names in dataloader:
-                input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000).input_values
-                input_values = input_values.reshape(input_values.shape[1],input_values.shape[2], input_values.shape[-1])
-                input_values, labels = input_values.to(self.device), labels.to(self.device)
-                                
+               
                 ground_truth_labels = self._get_ground_truth_labels(ground_truth_names)
                 
                 predictions = self._process_sequences(model, input_values)
@@ -213,8 +215,11 @@ class Trainer:
     def _process_sequences(self, model, input_values):
         predictions = []
         for i in range(input_values.size(1)):
-            input_slice = input_values[:, i, :]
-            pred = model(input_slice.float())
+            input_values = input_values[:, i, :]
+            input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000)
+            input_values, labels = input_values.to(self.device), labels.to(self.device)
+                 
+            pred = model(input_values)
             predictions.append(pred)
         return torch.stack(predictions, dim=1)
 

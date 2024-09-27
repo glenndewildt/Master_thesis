@@ -8,15 +8,11 @@ from config import Config
 
 if __name__ == "__main__":
     config = Config()
+    # Define the model name
+
+    # Load the processor
+
     #bert_config = HubertConfig.from_pretrained(config.bert_model)
-    bert_config = WavLMConfig.from_pretrained("microsoft/wavlm-large")
-    processor = Wav2Vec2Processor.from_pretrained(
-        "facebook/wav2vec2-large-960h")
-    #processor = WavLMProcessor.from_pretrained("microsoft/wavlm-base-plus")
-    device = torch.device(
-        config.device if torch.cuda.is_available() else "cpu")
-    criterion = PearsonLoss()
-    print(device)
 
     # Enable Flash Attention
 
@@ -36,6 +32,14 @@ if __name__ == "__main__":
         window_size=config.window_size,
         step_size=config.step_size,
     )
+
+    model_name = "patrickvonplaten/wavlm-libri-clean-100h-base-plus"
+    bert_config = AutoConfig.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(model_name)
+        
+    device = torch.device( config.device if torch.cuda.is_available() else "cpu")
+    criterion = PearsonLoss()
+    print(device)
 
     trainer = Trainer(config, model_classes, criterion,
                       device, bert_config, ground_labels, processor)

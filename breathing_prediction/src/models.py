@@ -12,7 +12,9 @@ from transformers import (
     WavLMForCTC,
     AutoFeatureExtractor,
     AutoConfig,
-    AutoModelForAudioClassification
+    AutoModelForAudioClassification,
+    AutoModel,
+    AutoProcessor
 )
 import math
 import json
@@ -157,16 +159,16 @@ class RespBertLSTMModel(Wav2Vec2PreTrainedModel):
         x = self.tanh_va(x)
         return x
 
-class RespBertAttionModel(Wav2Vec2PreTrainedModel):
+class RespBertAttionModel(nn.Module):
     def __init__(self, bert_config, config):
-        super().__init__(bert_config)
+        super(RespBertAttionModel, self).__init__()
         self.config = bert_config
         self.output = config['output_size']
         
 
-        self.wav_model = AutoModelForAudioClassification(bert_config)
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
 
-        self.wav_model.encoder.layers = self.wav_model.encoder.layers[0:-6]
+        self.wav_model.encoder.layers = self.wav_model.encoder.layers[0:2]
 
         self.d_model = bert_config.hidden_size
         self.features = config['hidden_units']
@@ -192,7 +194,7 @@ class RespBertAttionModel(Wav2Vec2PreTrainedModel):
         self.tanh_va = nn.Tanh()
         self.flatten = nn.Flatten()      
         #self.init_weights()
-        self.unfreeze_last_n_blocks(4)
+        #self.unfreeze_last_n_blocks(4)
                 
     def freeze_conv_only(self):
         for param in self.wav_model.parameters():
@@ -207,7 +209,7 @@ class RespBertAttionModel(Wav2Vec2PreTrainedModel):
                 param.requires_grad = True
 
     def forward(self, input_values):
-        x= self.wav_model(input_values)[0]
+        x= self.wav_model(**input_values)[0]
       
 
         x = self.transformer_layer(x)        

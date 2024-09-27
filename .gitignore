@@ -2,3 +2,5 @@
 __pycache__/
 /breathing_prediction/results
 DATA/
+breathing_prediction/src/slurm-*
+

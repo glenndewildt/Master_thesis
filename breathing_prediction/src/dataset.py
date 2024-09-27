@@ -1,19 +1,22 @@
 from torch.utils.data import Dataset
-import numpy as np
 import pickle
+import torch.nn as nn
+import torch
+from audiomentations import Compose, AddGaussianNoise, TimeStretch, PitchShift, Shift
+import numpy as np
 import torchaudio
-import torchaudio.transforms as T
+from torch.utils.data import Dataset
+import torch
+from torch.utils.data import Dataset
+import torchaudio.functional as F
+import random
 
 class AugmentedDataset(Dataset):
-    def __init__(self, data, labels, augment=True, sample_rate=16000):
-        self.data = data
-        self.labels = labels
-        self.augment = augment
+    def __init__(self, data, labels, sample_rate=16000, augment=True):
+        self.data = torch.tensor(data) if not isinstance(data, torch.Tensor) else data
+        self.labels = torch.tensor(labels) if not isinstance(labels, torch.Tensor) else labels
         self.sample_rate = sample_rate
-        self.augmentations = T.Compose([
-            T.AdditiveNoise(noise_factor=0.005),
-            T.PitchShift(sample_rate=sample_rate, n_steps=2),
-        ])
+        self.augment = augment
 
     def __len__(self):
         return len(self.data)
@@ -21,18 +24,74 @@ class AugmentedDataset(Dataset):
     def __getitem__(self, idx):
         signal = self.data[idx]
         label = self.labels[idx]
-
+        
         if self.augment:
             signal = self.apply_augmentation(signal)
-
+        
         return signal, label
 
     def apply_augmentation(self, signal):
-        signal = self.augmentations(signal)
-        return signal
+        # Ensure the signal is 2D (channels, data)
+        if signal.dim() == 1:
+            signal = signal.unsqueeze(0)
+        # List of all possible augmentations
+        augmentations = [
+            self.apply_noise,
+            self.apply_gain,
+            self.apply_pitch_shift,
+            #self.apply_reverb,
+            self.apply_lowpass,
+            self.apply_highpass,
+            self.apply_freq_mask,
+            self.apply_time_mask,
+        ]
+        
+        # Randomly apply 2-3 augmentations
+        num_augmentations = random.randint(0, 1)
+        chosen_augmentations = random.sample(augmentations, num_augmentations)
+        
+        for aug in chosen_augmentations:
+            #print(f"{aug} shape {signal.shape}")
+            signal = aug(signal)
+        
+        return signal.squeeze(0)  # Return to original shape
 
+    def apply_noise(self, signal):
+        # Generate noise and apply it with a specified SNR
+        noise = torch.randn_like(signal)
+        snr = torch.tensor([30])  # Example SNR value
+        return F.add_noise(signal, noise, snr)
 
+    def apply_gain(self, signal):
+        gain_db = torch.tensor(random.uniform(-3, 3))  # Range of gain values in dB
+        gain_db = torch.tensor(2)  # Example gain value in dB
+        return F.gain(signal, gain_db)
 
+    def apply_pitch_shift(self, signal):
+        n_steps = random.uniform(-2, 2)
+        return F.pitch_shift(signal, self.sample_rate, n_steps)
+
+    def apply_reverb(self, signal):
+        # Example impulse response (IR) for reverb
+        ir = torch.randn(1, 4000)  # This should be replaced with a real IR
+        return F.convolve(signal, ir)
+
+    def apply_lowpass(self, signal):
+        cutoff_freq = 4000  # Example cutoff frequency
+        return F.lowpass_biquad(signal, self.sample_rate, cutoff_freq)
+
+    def apply_highpass(self, signal):
+        cutoff_freq = 100  # Example cutoff frequency
+        return F.highpass_biquad(signal, self.sample_rate, cutoff_freq)
+
+    def apply_freq_mask(self, signal):
+        freq_mask_param = torch.tensor(400)  # Example frequency mask parameter
+        return F.mask_along_axis(signal, freq_mask_param, 0, axis=0)
+
+    def apply_time_mask(self, signal):
+        time_mask_param = 20  # Example time mask parameter
+        mask_value = 0  # Example mask value
+        return F.mask_along_axis(signal, time_mask_param, mask_value, axis=1)
 class CustomDataset:
     def __init__(self, data, labels, name):
         self.data = np.array(data) if not isinstance(data, np.ndarray) else data

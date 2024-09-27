@@ -18,11 +18,11 @@ from utils import *
 from losses import *
 from dataset import *
 from config import Config
-from torchviz import make_dot
+#from torchviz import make_dot
 
 
 class Trainer:
-    def __init__(self, config, model_classes, criterion, device, bert_config, ground_labels):
+    def __init__(self, config, model_classes, criterion, device, bert_config, ground_labels, processor):
         self.ground_labels = ground_labels
         self.config = config
         self.model_classes = model_classes
@@ -30,14 +30,21 @@ class Trainer:
         self.device = device
         self.bert_config = bert_config
         self.run_dir = self._create_run_directory()
-        self.processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-large-960h")
+        self.processor = processor
         self.csv_file = os.path.join(self.run_dir, "results_summary.csv")
         self._create_csv_file()
         
     def _log_to_csv(self, model_name, fold, best_val_loss, test_loss, test_acc):
         with open(self.csv_file, mode='a', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow([model_name, fold, best_val_loss, test_loss, test_acc])
+            writer.writerow([model_name, fold, best_val_loss, test_loss,test_acc])
+            
+    def _log_data_used_to_csv(self, model_name, fold, train_data, val_data):
+        with open(self.csv_file, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Model', 'Fold', 'Index_train_data', ' Index_validation_data', 'len_validation'])
+            writer.writerow([model_name, fold, train_data,val_data, len(val_data)])
+            writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
 
 
     def _create_run_directory(self):
@@ -49,10 +56,10 @@ class Trainer:
     def _create_csv_file(self):
         with open(self.csv_file, mode='w', newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
+            #writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
 
     def train(self, train_data, test_data):
-        kfold = KFold(n_splits=self.config.n_folds, shuffle=True, random_state=42)
+        kfold = KFold(n_splits=self.config.n_folds, shuffle=True)
         
         for model_name, model_class in self.model_classes.items():
             print(f"Training {model_name}...")
@@ -65,6 +72,7 @@ class Trainer:
 
                 train_sampler = SubsetRandomSampler(train_idx)
                 val_sampler = SubsetRandomSampler(val_idx)
+                self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)
                 
                 train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler)
                 val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
@@ -72,8 +80,11 @@ class Trainer:
 
                 model_config = self.config.models[model_name]
                 model_config['output_size'] = train_data.get_output_shape()
+
                 model = model_class(bert_config=self.bert_config, config=model_config).to(self.device)
-                
+                #Load from path
+                #model.load_state_dict(torch.load(model_path, map_location=device))
+
                 optimizer = AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
                 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)
                 
@@ -125,14 +136,14 @@ class Trainer:
         total_acc = 0.0
         
         input_values, labels = flatten_and_shuffle_data(dataloader)
-        train_dataset = CustomDataset(input_values, labels, [])
-        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)   
+        train_dataset = AugmentedDataset(input_values, labels)
+        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=8)   
         l = len(dataloader.dataset)
             
         progress_bar = tqdm(dataloader, desc=f"Training Epoch {epoch+1}/{total_epochs}")
         i = 0
 
-        for batch_idx, (input_values, labels, _) in enumerate(progress_bar):
+        for batch_idx, (input_values, labels) in enumerate(progress_bar):
 
             optimizer.zero_grad()
             input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000).input_values

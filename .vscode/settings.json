@@ -1,7 +1,8 @@
 {
     "git.ignoreLimitWarning": true,
     "git.user.name": "Glenn",
-    "git.user.email": "glenndewildt@gmail.com"
+    "git.user.email": "glenndewildt@gmail.com",
+    "notebook.formatOnSave.enabled": true
 
 
 }

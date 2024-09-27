@@ -9,7 +9,10 @@ from transformers import (
     WavLMModel,
     Wav2Vec2Processor,
     HubertConfig,
-    WavLMForCTC, 
+    WavLMForCTC,
+    AutoFeatureExtractor,
+    AutoConfig,
+    AutoModelForAudioClassification
 )
 import math
 import json
@@ -88,7 +91,7 @@ class VRBModel(nn.Module):
     
 ## MY PROPOSED MODEL DESIGNS
 class RespBertLSTMModel(Wav2Vec2PreTrainedModel):
-    def __init__(self, bert_config,config = None):
+    def __init__(self,config = None):
         super().__init__(bert_config)
         self.config = bert_config
 
@@ -160,16 +163,10 @@ class RespBertAttionModel(Wav2Vec2PreTrainedModel):
         self.config = bert_config
         self.output = config['output_size']
         
-        if bert_config.model_type == "wav2vec2":
-            self.wav_model = Wav2Vec2Model(bert_config)
-        elif bert_config.model_type == "hubert":
-            self.wav_model = HubertModel(bert_config)
-        elif bert_config.model_type == "wavlm":
-            self.wav_model = WavLMModel(bert_config)
-        else:
-            raise ValueError("Unsupported model type")
-        # Replace the attention mechanism within each encoder layer
-        self.wav_model.encoder.layers = self.wav_model.encoder.layers[6]
+
+        self.wav_model = AutoModelForAudioClassification(bert_config)
+
+        self.wav_model.encoder.layers = self.wav_model.encoder.layers[0:-6]
 
         self.d_model = bert_config.hidden_size
         self.features = config['hidden_units']
@@ -210,7 +207,7 @@ class RespBertAttionModel(Wav2Vec2PreTrainedModel):
                 param.requires_grad = True
 
     def forward(self, input_values):
-        x, _ = self.wav_model(input_values)
+        x= self.wav_model(input_values)[0]
       
 
         x = self.transformer_layer(x)        

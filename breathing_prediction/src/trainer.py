@@ -83,7 +83,7 @@ class Trainer:
 
                 model = model_class(bert_config=self.bert_config, config=model_config).to(self.device)
                 #Load from path
-                #model.load_state_dict(torch.load(model_path, map_location=device))
+                model.load_state_dict(torch.load("../results/logs/run_20240926_152058/RespBertAttionModel_best_model_fold_0.pt", map_location=self.device))
 
                 optimizer = AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
                 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)

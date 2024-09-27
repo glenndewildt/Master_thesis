@@ -65,50 +65,17 @@ class Config:
             "output_size": None  # Will be set dynamically
         },
         "RespBertLSTMModel": {
+            "model_name": "microsoft/wavlm-large",
             "hidden_units": 768,
             "n_lstm": 2,
             "output_size": None  
         },
         "RespBertAttionModel": {
-            "model_name": "facebook/wav2vec2-base",
+            "model_name": "microsoft/wavlm-large",
             "hidden_units": 128,
             "n_attion": 1,
             "output_size": None  
-        },
-        "OG_1DCNN":{
-            "in_channels": 1,
-            "conv_layers": [
-                {"out_channels": 64, "kernel_size": 10, "stride": 1, "pool_size": 10},
-                {"out_channels": 128, "kernel_size": 8, "stride": 1, "pool_size": 4},
-                {"out_channels": 256, "kernel_size": 6, "stride": 1, "pool_size": 4},
-                {"out_channels": 256, "kernel_size": 5, "stride": 1, "pool_size": 4}
-            ],
-            "dropout_rate": 0.3,
-            "lstm_input_size": 256,  # This should match the output size of the last Conv1D layer
-            "lstm_hidden_size": 256,
-            "output_size": 1,
-            "n_lstm": 2
-
-        },
-        
-        "wav2vec2_1DCNN": {
-        "in_channels": 1,
-        "conv_layers": [
-            {"out_channels": 512, "kernel_size": 10, "stride": 5},
-            {"out_channels": 512, "kernel_size": 3, "stride": 2},
-            {"out_channels": 512, "kernel_size": 3, "stride": 2},
-            {"out_channels": 512, "kernel_size": 3, "stride": 2},
-            {"out_channels": 512, "kernel_size": 3, "stride": 2},
-            {"out_channels": 512, "kernel_size": 2, "stride": 2},
-            {"out_channels": 512, "kernel_size": 2, "stride": 2}
-        ],
-        "dropout_rate": 0.3,
-        "lstm_hidden_size": 512,
-        "dense_units": 512,
-        "output_size": 1,
-        "n_lstm": 2
-
-    }
+        }
     }
 
 

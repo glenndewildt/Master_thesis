@@ -39,7 +39,7 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
         self.output = nn.Linear(config['hidden_units'], config['output_size'])
 
         self.flatten = nn.Flatten()
-    def freeze_blocks(self, num_blocks: int):
+    def freeze_blocks(self):
         for param in self.wav2vec2.parameters():
             param.requires_grad = False
     

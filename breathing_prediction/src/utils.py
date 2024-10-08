@@ -15,7 +15,6 @@ from scipy.io import wavfile
 from scipy.stats import pearsonr
 from tqdm import tqdm
 from sklearn.model_selection import KFold
-from audiomentations import Compose, PitchShift
 from dataset import *
 
 class EarlyStopping:

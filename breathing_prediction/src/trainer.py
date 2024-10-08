@@ -4,6 +4,8 @@ import numpy as np
 import csv
 import scipy
 import torch
+import torch.optim as optim
+
 from tqdm import tqdm
 from sklearn.model_selection import KFold, ParameterGrid
 from sklearn.utils import shuffle
@@ -19,10 +21,50 @@ from losses import *
 from dataset import *
 from config import Config
 #from torchviz import make_dot
+from scipy.ndimage import gaussian_filter
+from scipy.interpolate import CubicSpline
+from scipy.signal import butter, filtfilt
+from scipy.stats import norm
+from scipy.optimize import minimize
+from pykalman import KalmanFilter
+import concurrent.futures
+from scipy.signal import get_window
+from scipy.ndimage import label
+from scipy.stats import norm
+from scipy.optimize import minimize
+from scipy.signal import butter, sosfilt
+from scipy import signal
+from torch.cuda.amp import GradScaler, autocast
+class KalmanFilter:
+    def __init__(self, initial_state_mean, state_covariance, observation_covariance):
+        self.initial_state_mean = initial_state_mean
+        self.state_covariance = state_covariance
+        self.observation_covariance = observation_covariance
+        self.current_state_estimate = initial_state_mean
 
+    def predict(self):
+        # Prediction step (state transition model)
+        self.current_state_estimate = self.current_state_estimate
+        self.state_covariance = self.state_covariance + self.observation_covariance
+
+    def update(self, observation):
+        # Update step
+        kalman_gain = self.state_covariance / (self.state_covariance + self.observation_covariance)
+        self.current_state_estimate += kalman_gain * (observation - self.current_state_estimate)
+        self.state_covariance *= (1 - kalman_gain)
+
+    def filter(self, observations):
+        estimates = []
+        for observation in observations:
+            self.predict()
+            self.update(observation)
+            estimates.append(self.current_state_estimate.clone())
+        return torch.stack(estimates)
 
 class Trainer:
     def __init__(self, config, model_classes, criterion, device, bert_config, ground_labels, processor):
+        self.scaler = GradScaler()
+
         self.ground_labels = ground_labels
         self.config = config
         self.model_classes = model_classes
@@ -59,8 +101,10 @@ class Trainer:
             #writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
 
     def train(self, train_data, test_data):
-        kfold = KFold(n_splits=self.config.n_folds, shuffle=True, random_state= 42)
-        
+        #kfold = KFold(n_splits=self.config.n_folds, shuffle=True, random_state= 42)
+        kfold = KFold(n_splits=self.config.n_folds)
+        self.criterion = self.criterion.to("cuda")
+
         for model_name, model_class in self.model_classes.items():
             print(f"Training {model_name}...")
             model_results = []
@@ -68,6 +112,9 @@ class Trainer:
             writer = SummaryWriter(os.path.join(self.run_dir, f"{model_name}"))
             self.writer = writer
             for fold, (train_idx, val_idx) in enumerate(kfold.split(train_data)):
+                if fold < (self.config.n_folds -1):
+                    continue
+
                 print(f"Fold {fold + 1}/{self.config.n_folds}")
 
                 train_sampler = SubsetRandomSampler(train_idx)
@@ -75,16 +122,23 @@ class Trainer:
                 self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)
                 #val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
 
-                train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler,num_workers=8)
-                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler,num_workers=8)
-                test_loader = DataLoader(test_data, batch_size=self.config.batch_size, num_workers=8)
+                train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler,num_workers=5)
+                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler,num_workers=5)
+                test_loader = DataLoader(test_data, batch_size=(self.config.batch_size*2), num_workers=5)
 
                 model_config = self.config.models[model_name]
                 model_config['output_size'] = train_data.get_output_shape()
 
-                model = model_class(bert_config=self.bert_config, config=model_config).to(self.device)
+                model = model_class(bert_config=self.bert_config, config=model_config)
+                model = model.to(self.device)
                 #Load from path
-                #model.load_state_dict(torch.load("../results/logs/run_20240927_211705/RespBertAttionModel_best_model_fold_0.pt", map_location=self.device))
+                #/home/gdwildt/Master_thesis/breathing_prediction/results/logs/attaion_model_20_epochs_85/RespBertAttionModel_best_model_fold_6.pt
+                #/home/gdwildt/Master_thesis/breathing_prediction/results/logs/attaion_model_20_epochs_85
+                #/home/gdwildt/Master_thesis/breathing_prediction/results/logs/Attention_Waml_20_epochs_folds5/RespBertAttionModel_best_model_fold_0.pt
+                #breathing_prediction/results/logs/bi_lstm_0_7_no_adap/RespBertLSTMModel_best_model_fold_19.pt
+                #breathing_prediction/results/logs/LSTM_85_0-10/RespBertLSTMModel_best_model_fold_6.pt
+                #breathing_prediction/results/logs/bi_lstm_0-7/RespBertLSTMModel_best_model_fold_6.pt
+                #model.load_state_dict(torch.load("../results/logs/bi_lstm_0-7V2/RespBertLSTMModel_best_model_fold_6.pt", map_location=self.device))
 
                 optimizer = AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
                 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)
@@ -94,13 +148,13 @@ class Trainer:
                 early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
                 for epoch in range(self.config.epochs):
 
+                    #val_loss, val_acc , val_flat_acc, val_flat_acc_ola = self._evaluate(model, val_loader)
 
-                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer, epoch, self.config.epochs)
-                    val_loss, val_acc , val_flat_acc = self._evaluate(model, val_loader)
-                    test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader)
+                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer,scheduler, epoch, self.config.epochs)
+                    val_loss, val_acc , val_flat_acc, val_flat_acc_ola = self._evaluate(model, val_loader)
+                    test_loss, test_acc, test_flat_acc,  test_flat_acc_ola = self._evaluate(model, test_loader)
 
-                    scheduler.step()
-                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc)
+                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc, test_flat_acc_ola, val_flat_acc_ola)
                     
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
@@ -131,44 +185,51 @@ class Trainer:
             writer.close()
             self._print_model_results(model_name, model_results, avg_results)
 
-    def _train_epoch(self, model, dataloader, optimizer, epoch, total_epochs):
+    def _train_epoch(self, model, dataloader, optimizer,scheduler, epoch, total_epochs):
         model.train()
         total_loss = 0.0
         total_acc = 0.0
         
         input_values, labels = flatten_and_shuffle_data(dataloader)
         train_dataset = AugmentedDataset(input_values, labels)
-        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=8)   
+        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=12)   
         l = len(dataloader.dataset)
             
         progress_bar = tqdm(dataloader, desc=f"Training Epoch {epoch+1}/{total_epochs}")
         i = 0
-
         for batch_idx, (input_values, labels) in enumerate(progress_bar):
+                        # Wait for the GPU to finish all operations before starting a new iteration
+            torch.cuda.empty_cache()  # Clear cache to free up memory
+            torch.cuda.synchronize()   # Ensure all GPU operations are completed
+
             s = input_values.shape
 
-            optimizer.zero_grad()
             input_values = np.stack(input_values, axis= 0)
+                        #input_values = input_values.reshape(input_values.shape[1], input_values.shape[-1])
 
-            input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000)
 
-            #input_values = input_values.reshape(input_values.shape[1], input_values.shape[-1])
-            input_values, labels = input_values.to(self.device), labels.to(self.device)
-          
-            predictions = model(input_values)
-            loss = self.criterion(predictions.float(), labels.float())
-            if i == 0:
-                #make_dot(predictions, params=dict(model.named_parameters())).render("model", format="png")
-                i =1  
-            loss.backward()
-            optimizer.step()
+            #input_values, labels = input_values.to(self.device), labels.to(self.device) 
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000)
+                input_values, labels = input_values.to(self.device), labels.to(self.device) 
+                predictions = model(input_values)
+                loss = self.criterion(predictions, labels)
+
+            self.scaler.scale(loss).backward()  # Scale the loss and call backward
+            self.scaler.unscale_(optimizer)
+
+        # Since the gradients of optimizer's assigned parameters are now unscaled, clips as usual.
+        # You may use the same value for max_norm here as you would without gradient scaling.
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            self.scaler.step(optimizer)  # Unscale gradients and call optimizer step
+            self.scaler.update()  # Update the scale for next iteration
             scheduler.step(epoch + batch_idx / len(dataloader))
             
             total_loss += loss.item()
             total_acc += 1.0 - loss.item()  # Assuming accuracy is 1 - loss for this task
             
             progress_bar.set_description(f"Training Epoch {epoch+1}/{total_epochs}, Avg Loss: {total_loss/(batch_idx+1):.4f}, Acc: {total_acc/(batch_idx+1):.4f}")
-            
+            optimizer.zero_grad()
             del input_values, labels, predictions, loss
             torch.cuda.empty_cache()
         
@@ -178,31 +239,61 @@ class Trainer:
         model.eval()
         total_loss = 0.0
         total_acc = 0.0
-        total_acc_flat = 0.0
-        
+        total_acc_flat = {
+            'original': 0.0,
+            'gaussian': 0.0,
+            'cubic': 0.0,
+            'kalman': 0.0,
+        }
+
         with torch.no_grad():
             for input_values, labels, ground_truth_names in dataloader:
-               
                 ground_truth_labels = self._get_ground_truth_labels(ground_truth_names)
-                
                 predictions = self._process_sequences(model, input_values)
                 loss = self.criterion(predictions.to("cpu"), labels)
-                
                 total_loss += loss.item()
-                total_acc += 1.0 - loss.item() 
-                
-                average = self._unsplit_data_ogsize(predictions.cpu().numpy(), self.config.window_size, self.config.step_size, self.config.data_points_per_second, ground_truth_labels.shape[-1])
-                total_acc_flat += self._calculate_flattened_accuracy(average, ground_truth_labels)
-                
+                total_acc += 1.0 - loss.item()
+
+                predictions_np = predictions.cpu().numpy()
+                for method in ['original','gaussian',"cubic", "kalman"]:
+                    average = self._unsplit_data(predictions_np, method, ground_truth_labels.shape[-1])
+                    total_acc_flat[method] += self._calculate_flattened_accuracy(average, ground_truth_labels)
+
                 del input_values, labels, predictions, loss
                 torch.cuda.empty_cache()
-        
+
         num_samples = len(dataloader)
+        avg_loss = total_loss / num_samples
+        avg_acc = total_acc / num_samples
+        avg_flat_acc = {method: acc / num_samples for method, acc in total_acc_flat.items()}
 
-        avg_loss, avg_acc, avg_flat_acc = total_loss / num_samples, total_acc / num_samples, total_acc_flat / num_samples
-        print(f"val loss {avg_loss}, val_acc {avg_acc} , val_flat_acc, {avg_flat_acc}" )
-        return avg_loss, avg_acc, avg_flat_acc 
+        print(f"Val Loss: {avg_loss:.4f}, Val Acc: {avg_acc:.4f}")
+        for method, acc in avg_flat_acc.items():
+            print(f"Val Flat Acc ({method}): {acc:.4f}")
 
+        return avg_loss, avg_acc, 0 , 0
+
+
+    def _unsplit_data(self, windowed_data, method, original_length):
+            original_length = original_length
+            window_size = self.config.window_size
+            step_size = self.config.step_size
+            data_points_per_second = 25
+
+            if method == 'original':
+                return self._unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_second, original_length)
+            elif method == 'gaussian':
+                return self._unsplit_data_gaussian(windowed_data, window_size, step_size, data_points_per_second, original_length)
+            elif method == 'cubic':
+                return self._unsplit_data_cubic(windowed_data, window_size, step_size, data_points_per_second, original_length)
+            elif method == 'kalman':
+                return self._unsplit_data_kalman(windowed_data, window_size, step_size, data_points_per_second, original_length)
+            elif method == 'butterworth':
+                return self._unsplit_data_butterworth(windowed_data, window_size, step_size, data_points_per_second, original_length)
+            elif method == 'probabilistic':
+                return self._unsplit_data_probabilistic(windowed_data, window_size, step_size, data_points_per_second, original_length)
+            else:
+                raise ValueError(f"Unknown method: {method}")
 
     def _get_ground_truth_labels(self, ground_truth_names):
         ground_truth_labels = []
@@ -215,12 +306,13 @@ class Trainer:
     def _process_sequences(self, model, input_values):
         predictions = []
         for i in range(input_values.size(1)):
+    
             slice_input = input_values[:, i, :]
             slice_input = np.stack(slice_input, axis=0)
-            slice_input = self.processor(slice_input, return_tensors="pt", padding="longest", sampling_rate = 16000)
-            slice_input = slice_input.to(self.device)
-                 
-            pred = model(slice_input)
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                slice_input = self.processor(slice_input, return_tensors="pt", padding="longest", sampling_rate = 16000)
+                slice_input = slice_input.to(self.device)
+                pred = model(slice_input)
             predictions.append(pred)
         return torch.stack(predictions, dim=1)
 
@@ -234,19 +326,58 @@ class Trainer:
     def _choose_real_labs_only_with_filenames(self, labels, filenames):
         return labels[labels['filename'].isin(filenames)]
 
-    def _unsplit_data_ogsize(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
-        batch_size, num_windows, prediction_size = windowed_data.shape
+    def _unsplit_data_ogsize(self,windowed_data, window_size, step_size, data_points_per_second, original_length):
+        # Convert to a PyTorch tensor and move to GPU
+
+        if isinstance(windowed_data, np.ndarray):
+            windowed_data = torch.tensor(windowed_data, device='cuda')  # Use 'cuda' for GPU
+
+        device = windowed_data.device  # Ensure to use the same device as windowed_data     
         window_size_points = window_size * data_points_per_second
         step_size_points = step_size * data_points_per_second
-        original_data = np.zeros((batch_size, original_length))
-        overlap_count = np.zeros((batch_size, original_length))
+        batch_size, num_windows, data_lenght = windowed_data.shape
         
-        for b in range(0,batch_size ):
-            for i in range(0,num_windows):
+        original_data = torch.zeros((batch_size, original_length), device=device)
+        overlap_count = torch.zeros((batch_size, original_length), device=device)
+
+        def process_batch(batch_index):
+            for i in range(num_windows):
                 start = i * step_size_points
                 end = start + window_size_points
                 if end > original_length:
                     end = original_length
+                segment_length = end - start
+
+                # Update original data and overlap count
+                original_data[batch_index, start:end] += windowed_data[batch_index, i, :segment_length]
+                overlap_count[batch_index, start:end] += 1
+
+        # Use Torch's built-in parallelism
+        for b in range(batch_size):
+            process_batch(b)
+
+        # Average the overlapping regions
+        with torch.no_grad():
+            original_data = torch.where(overlap_count != 0, original_data / overlap_count, torch.zeros_like(original_data))
+
+        # Trim the data to match the original length
+        original_data = original_data[:, :original_length]
+
+        return original_data.to("cpu")
+
+
+    def _unsplit_data_gaussian(self,windowed_data, window_size, step_size, data_points_per_second, original_length):
+
+        batch_size, num_windows, prediction_size = windowed_data.shape
+        window_size_points = int(window_size * data_points_per_second)
+        step_size_points = int(step_size * data_points_per_second)
+        original_data = np.zeros((batch_size, original_length))
+        overlap_count = np.zeros((batch_size, original_length))
+        
+        for b in range(batch_size):
+            for i in range(num_windows):
+                start = i * step_size_points
+                end = min(start + window_size_points, original_length)
                 segment_length = end - start
                 original_data[b, start:end] += windowed_data[b, i, :segment_length]
                 overlap_count[b, start:end] += 1
@@ -254,12 +385,208 @@ class Trainer:
         # Average the overlapping regions
         original_data = np.divide(original_data, overlap_count, where=overlap_count != 0)
         
-        # Trim the data to match the original length
-        original_data = original_data[:, :original_length]
+        # Apply Gaussian filter to the entire signal
+        for b in range(batch_size):
+            original_data[b] = gaussian_filter(original_data[b], sigma=.5)
         
         return original_data
-    
-    def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc):
+
+    def _unsplit_data_cubic(self,windowed_data, window_size, step_size, data_points_per_second, original_length):
+
+        batch_size, num_windows, prediction_size = windowed_data.shape
+        window_size_points = int(window_size * data_points_per_second)
+        step_size_points = int(step_size * data_points_per_second)
+        original_data = np.zeros((batch_size, original_length))
+        overlap_count = np.zeros((batch_size, original_length))
+        
+        for b in range(batch_size):
+            for i in range(num_windows):
+                start = i * step_size_points
+                end = min(start + window_size_points, original_length)
+                segment_length = end - start
+                original_data[b, start:end] += windowed_data[b, i, :segment_length]
+                overlap_count[b, start:end] += 1
+        
+        # Average the overlapping regions
+        original_data = np.divide(original_data, overlap_count, where=overlap_count != 0)
+        
+        # Apply cubic spline interpolation to the entire signal
+        for b in range(batch_size):
+            x = np.arange(original_length)
+            cs = CubicSpline(x, original_data[b])
+            original_data[b] = cs(x)
+        
+        return original_data
+
+    def _unsplit_data_kalman(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
+        # Ensure windowed_data is a tensor on the GPU
+        windowed_data = torch.tensor(windowed_data, device='cuda')
+
+        batch_size, num_windows, prediction_size = windowed_data.shape
+        window_size_points = int(window_size * data_points_per_second)
+        step_size_points = int(step_size * data_points_per_second)
+
+        # Initialize tensors on GPU
+        original_data = torch.zeros((batch_size, original_length), device='cuda')
+        overlap_count = torch.zeros((batch_size, original_length), device='cuda')
+
+        # Accumulate data using windowed_data
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = min(start + window_size_points, original_length)
+            segment_length = end - start
+
+            # Use slicing to accumulate results across all batches
+            original_data[:, start:end] += windowed_data[:, i, :segment_length]
+            overlap_count[:, start:end] += 1
+
+        # Average the overlapping regions
+        original_data = torch.where(overlap_count != 0, original_data / overlap_count, torch.zeros_like(original_data))
+
+        # Kalman Filter parameters
+        initial_state_mean = 0.0  # Adjust as needed
+        state_covariance = 0.5  # Decreased to reflect lower uncertainty
+        observation_covariance = 0.1  # Adjusted to reflect observation noise
+
+        # Apply Kalman Filtering to the entire signal
+        kalman_filter = KalmanFilter(initial_state_mean, state_covariance, observation_covariance)
+        for b in range(batch_size):
+            original_data[b] = kalman_filter.filter(original_data[b])
+
+        return original_data.cpu()
+    def _unsplit_data_probabilistic(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
+        # Ensure windowed_data is a tensor on the GPU
+        windowed_data = torch.tensor(windowed_data, device='cuda')
+        batch_size, num_windows, prediction_size = windowed_data.shape
+        window_size_points = int(window_size * data_points_per_second)
+        step_size_points = int(step_size * data_points_per_second)
+
+        # Initialize tensors on GPU
+        original_data = torch.zeros((batch_size, original_length), device='cuda')
+        overlap_count = torch.zeros((batch_size, original_length), device='cuda')
+        
+        def breathing_weight(x):
+            return torch.exp(-x**2 / (2 * 0.3**2))  # Gaussian-like weight, adjust 0.3 as needed
+
+        # First pass: Identify overlap regions
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = min(start + window_size_points, original_length)
+            overlap_count[:, start:end] += 1
+
+        # Second pass: Apply weighted reconstruction only in overlap regions
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = min(start + window_size_points, original_length)
+            segment_length = end - start
+
+            # Create weights for this window
+            weights = breathing_weight(torch.linspace(-1, 1, segment_length, device='cuda'))
+            
+            # Identify overlap and non-overlap regions in this window
+            is_overlap = overlap_count[:, start:end] > 1
+            
+            # For overlap regions: apply weighted accumulation
+            original_data[:, start:end] += torch.where(
+                is_overlap,
+                windowed_data[:, i, :segment_length] * weights,
+                torch.zeros_like(windowed_data[:, i, :segment_length])
+            )
+            
+            # For non-overlap regions: directly copy the data
+            original_data[:, start:end] = torch.where(
+                ~is_overlap,
+                windowed_data[:, i, :segment_length],
+                original_data[:, start:end]
+            )
+
+        # Normalize only the overlapping regions
+        overlap_mask = overlap_count > 1
+        original_data[overlap_mask] /= overlap_count[overlap_mask]
+
+        return original_data.cpu().numpy()
+    def _unsplit_data_butterworth(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
+        # Ensure windowed_data is a tensor on the GPU
+        windowed_data = torch.tensor(windowed_data, device='cuda')
+        batch_size, num_windows, prediction_size = windowed_data.shape
+        window_size_points = int(window_size * data_points_per_second)
+        step_size_points = int(step_size * data_points_per_second)
+
+        # Initialize tensors on GPU
+        original_data = torch.zeros((batch_size, original_length), device='cuda')
+        overlap_count = torch.zeros((batch_size, original_length), device='cuda')
+
+        # Accumulate data using windowed_data
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = min(start + window_size_points, original_length)
+            segment_length = end - start
+            original_data[:, start:end] += windowed_data[:, i, :segment_length]
+            overlap_count[:, start:end] += 1
+
+        # Average the overlapping regions
+        original_data = torch.where(overlap_count != 0, original_data / overlap_count, original_data)
+
+        # Apply Butterworth filter to overlapping regions
+        for b in range(batch_size):
+            # Find contiguous overlap regions
+            overlap_indices = torch.nonzero(overlap_regions[b]).squeeze()
+            if overlap_indices.numel() > 0:
+                if overlap_indices.dim() == 0:
+                    # Only one overlap point
+                    starts = ends = overlap_indices.unsqueeze(0)
+                else:
+                    # Multiple overlap points
+                    starts = overlap_indices[:-1][(overlap_indices[1:] - overlap_indices[:-1] > 1)]
+                    ends = overlap_indices[1:][overlap_indices[1:] - overlap_indices[:-1] > 1]
+                    
+                    if len(starts) == 0:
+                        # All overlap points are contiguous
+                        starts = overlap_indices[0].unsqueeze(0)
+                        ends = overlap_indices[-1].unsqueeze(0)
+                    else:
+                        # Add first and last points if they're not included
+                        if overlap_indices[0] != starts[0]:
+                            starts = torch.cat([overlap_indices[0].unsqueeze(0), starts])
+                        if overlap_indices[-1] != ends[-1]:
+                            ends = torch.cat([ends, overlap_indices[-1].unsqueeze(0)])
+                
+                # Apply filter to each contiguous overlap region
+                for start, end in zip(starts, ends):
+                    segment = original_data[b, start:end].cpu().numpy()
+                    filtered_segment = sosfilt(sos, segment)
+                    original_data[b, start:end] = torch.from_numpy(filtered_segment).to('cuda')
+
+        return original_data.cpu().numpy()
+        
+    def sine_wave_asymmetrical(self, t, amplitude, frequency_in, frequency_out):
+        """
+        Generate an asymmetrical breathing pattern centered around 0.
+
+        Parameters:
+            t (np.ndarray): Time vector.
+            amplitude (float): Amplitude of the wave (1 for -1 to 1).
+            frequency_in (float): Frequency of inhalation (higher for faster rise).
+            frequency_out (float): Frequency of exhalation (lower for slower drop).
+
+        Returns:
+            np.ndarray: Combined breathing pattern.
+        """
+        # Sine wave for inhalation (quick rise, from -1 to 1)
+        wave_in = amplitude * (0.5 * (1 + np.sin(2 * np.pi * frequency_in * t)))  # Range 0 to 1
+        
+        # Linear function for exhalation, gradually decreasing (from 1 to -1)
+        exhalation_duration = 1 / frequency_out  # Duration based on frequency_out
+        wave_out = amplitude * (1 - (t / exhalation_duration))  # Linear drop from 1 to -1
+
+        # Combine parts to center around 0 and oscillate from -1 to 1
+        combined_wave = wave_in - (1 - wave_out)  # Inhale up, exhale down
+        combined_wave = np.clip(combined_wave, -1, 1)  # Clip to the range -1 to 1
+
+        return combined_wave
+
+ 
+    def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc,test_flat_acc_ola, val_flat_acc_ola):
         writer.add_scalar(f'Loss/train/fold_{fold}', train_loss, epoch)
         writer.add_scalar(f'Loss/val/fold_{fold}', val_loss, epoch)
         writer.add_scalar(f'Loss/test/fold_{fold}', test_loss, epoch)
@@ -268,6 +595,8 @@ class Trainer:
         writer.add_scalar(f'Accuracy/test/fold_{fold}', test_acc, epoch)
         writer.add_scalar(f'Accuracy_flat/test/fold_{fold}', test_flat_acc, epoch)
         writer.add_scalar(f'Accuracy_flat/val/fold_{fold}', val_flat_acc, epoch)
+        writer.add_scalar(f'Accuracy_flat_ola/test/fold_{fold}', test_flat_acc_ola, epoch)
+        writer.add_scalar(f'Accuracy_flat_ola/val/fold_{fold}', val_flat_acc_ola, epoch)
 
     def _calculate_average_results(self, model_results):
         avg_best_val_loss = np.mean([r['best_val_loss'] for r in model_results])

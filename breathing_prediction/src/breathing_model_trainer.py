@@ -20,9 +20,9 @@ if __name__ == "__main__":
         # "VRBModel": VRBModel,
         # "wav2vec2_1DCNN" : Model1DCNN,
         # "OG_1DCNN" : Model1DCNN,
-        # "RespBertLSTMModel": RespBertLSTMModel,time
+        "RespBertLSTMModel": RespBertLSTMModel,
         # "Wav2Vec2ConvLSTMModel": Wav2Vec2ConvLSTMModel,
-        "RespBertAttionModel": RespBertAttionModel,
+        #"RespBertAttionModel": RespBertAttionModel,
     }
 
     # Prepare data
@@ -34,10 +34,14 @@ if __name__ == "__main__":
     )
 
     model_name = "patrickvonplaten/wavlm-libri-clean-100h-base-plus"
-    bert_config = AutoConfig.from_pretrained(model_name)
+    #model_name = "microsoft/wavlm-large"
+    #bert_config = AutoConfig.from_pretrained(model_name)
     processor = AutoProcessor.from_pretrained(model_name)
-        
-    device = torch.device( config.device if torch.cuda.is_available() else "cpu")
+    bert_config = AutoConfig.from_pretrained(model_name )
+    #processor = AutoProcessor.from_pretrained(model_name)
+
+    device = torch.device(
+        config.device if torch.cuda.is_available() else "cpu")
     criterion = PearsonLoss()
     print(device)
 

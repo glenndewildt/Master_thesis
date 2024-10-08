@@ -9,23 +9,23 @@ class Config:
     breath_interspeech_folder = home+"/ComParE2020_Breathing/lab/"
     window_size = 30
     step_size = 4
-    n_folds = 10
+    n_folds = 7
     device = "cuda"
     data_points_per_second = 25
     
     ## Train parameters
-    epochs = 100
-    batch_size = 7
+    epochs = 60
+    batch_size = 25
     patience = 15
-    learning_rate = 1e-4
-    weight_decay = 1e-4
+    learning_rate = 5e-4
+    weight_decay = 0.01
 
     # Optimizer and scheduler parameters
     optimizer = "AdamW"
     scheduler = "CosineAnnealingWarmRestarts"
     t0 = 10
-    t_mult = 1
-    min_lr = 1e-5
+    t_mult = 2
+    min_lr = 2e-5
 
     # Logging and saving
     log_dir = "../results/logs"
@@ -65,8 +65,8 @@ class Config:
             "output_size": None  # Will be set dynamically
         },
         "RespBertLSTMModel": {
-            "model_name": "facebook/wav2vec2-base",
-            "hidden_units": 768,
+            "model_name": "microsoft/wavlm-large",
+            "hidden_units": 128,
             "n_lstm": 2,
             "output_size": None  
         },

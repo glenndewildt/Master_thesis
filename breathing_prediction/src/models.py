@@ -47,6 +47,13 @@ class FlashAttention2(nn.Module):
         self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.has_relative_position_bias = True
+        if self.has_relative_position_bias:
+            self.rel_attn_embed = nn.Embedding(config.num_buckets, self.num_heads)    
+    def _compute_position_bias(self, seq_length, device):
+        # Simplified position bias computation
+        position_bias = self.rel_attn_embed.weight.unsqueeze(1).repeat(1, seq_length, 1)
+        return position_bias.permute(2, 0, 1).unsqueeze(0)
 
     def forward(
         self,
@@ -64,6 +71,9 @@ class FlashAttention2(nn.Module):
         q = q.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        if self.has_relative_position_bias and position_bias is None:
+            position_bias = self._compute_position_bias(seq_len, hidden_states.device)
 
         if attention_mask is not None:
             attention_mask = attention_mask.view(bsz, seq_len)
@@ -91,8 +101,10 @@ class FlashAttention2(nn.Module):
 
         output = output.transpose(1, 2).contiguous().view(bsz, seq_len, self.embed_dim)
         output = self.out_proj(output)
+        outputs = (hidden_states, attention_mask, output_attentions)
 
-        return output, None, position_bias  # Return position_bias unchanged
+
+        return outputs
 
 class WavLMWithFlashAttention2(WavLMModel):
     def __init__(self, config):
@@ -100,28 +112,18 @@ class WavLMWithFlashAttention2(WavLMModel):
 
         # Replace the attention layers with Flash Attention 2
         for layer in self.encoder.layers:
-            flash_attn = FlashAttention2(config)
-            
-            # # Transfer weights from the original attention layer
-            # flash_attn.k_proj.weight.data = layer.attention.k_proj.weight.data
-            # flash_attn.k_proj.bias.data = layer.attention.k_proj.bias.data
-            # flash_attn.v_proj.weight.data = layer.attention.v_proj.weight.data
-            # flash_attn.v_proj.bias.data = layer.attention.v_proj.bias.data
-            # flash_attn.q_proj.weight.data = layer.attention.q_proj.weight.data
-            # flash_attn.q_proj.bias.data = layer.attention.q_proj.bias.data
-            # flash_attn.out_proj.weight.data = layer.attention.out_proj.weight.data
-            # flash_attn.out_proj.bias.data = layer.attention.out_proj.bias.data
-            
-            # layer.attention = flash_attn
+            layer.attention = FlashAttention2(config)
 
 def load_wavlm_with_flash_attention2(model_name_or_path):
     original_model = WavLMModel.from_pretrained(model_name_or_path)
     config = original_model.config
-    
-    flash_model = WavLMWithFlashAttention2(config)
-    flash_model.load_state_dict(original_model.state_dict(), strict=False)
-    
-    return flash_model
+    # Replace the attention layers with Flash Attention 2
+    for layer in original_model.encoder.layers:
+        layer.attention = FlashAttention2(config)
+    #flash_model = WavLMWithFlashAttention2(config)
+    #flash_model.load_state_dict(original_model.state_dict(), strict=False)
+    #del original_model
+    return original_model
 
 
 def convert_all_layers_to_flash_attention(model):
@@ -134,7 +136,7 @@ def convert_all_layers_to_flash_attention(model):
     Returns:
     - model (nn.Module): The model with FlashAttention applied.
     """
-    print(model)
+    #print(model)
     
     def replace_attention_with_flash(layer):
         """
@@ -326,12 +328,12 @@ class RespBertLSTMModel_flash(nn.Module):
         self.output = config['output_size']
         #self.wav_model = AutoModel.from_pretrained(config["model_name"])
         # Remove the last two encoder layers
-        self.wav_model  = load_wavlm_with_flash_attention2(config["model_name"])
-        print(self.wav_model)
-        # for i, layer in enumerate(self.wav_model.encoder.layers):
-        #     if hasattr(layer, 'attention'):
-        #         print(f"Replacing attention in layer {i}")
-        #         layer.attention = FlashAttentionWrapper(layer.attention)
+        #self.wav_model  = load_wavlm_with_flash_attention2(config["model_name"])
+        #print(self.wav_model)
+        for i, layer in enumerate(self.wav_model.encoder.layers):
+            if hasattr(layer, 'attention'):
+                print(f"Replacing attention in layer {i}")
+                layer.attention = FlashAttentionWrapper(layer.attention)
 
 
         self.d_model = bert_config.hidden_size

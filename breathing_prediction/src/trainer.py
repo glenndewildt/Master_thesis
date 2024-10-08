@@ -122,9 +122,8 @@ class Trainer:
                 self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)
                 #val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
 
-                train_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=train_sampler,num_workers=5)
-                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler,num_workers=5)
-                test_loader = DataLoader(test_data, batch_size=(self.config.batch_size*2), num_workers=5)
+                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler,num_workers=2)
+                test_loader = DataLoader(test_data, batch_size=(self.config.batch_size*2), num_workers=2)
 
                 model_config = self.config.models[model_name]
                 model_config['output_size'] = train_data.get_output_shape()
@@ -150,7 +149,7 @@ class Trainer:
 
                     #val_loss, val_acc , val_flat_acc, val_flat_acc_ola = self._evaluate(model, val_loader)
 
-                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer,scheduler, epoch, self.config.epochs)
+                    train_loss, train_acc = self._train_epoch(model, train_data[train_idx], optimizer,scheduler, epoch, self.config.epochs)
                     val_loss, val_acc , val_flat_acc, val_flat_acc_ola = self._evaluate(model, val_loader)
                     test_loss, test_acc, test_flat_acc,  test_flat_acc_ola = self._evaluate(model, test_loader)
 
@@ -185,14 +184,14 @@ class Trainer:
             writer.close()
             self._print_model_results(model_name, model_results, avg_results)
 
-    def _train_epoch(self, model, dataloader, optimizer,scheduler, epoch, total_epochs):
+    def _train_epoch(self, model, train_data, optimizer,scheduler, epoch, total_epochs):
         model.train()
         total_loss = 0.0
         total_acc = 0.0
-        
-        input_values, labels = flatten_and_shuffle_data(dataloader)
-        train_dataset = AugmentedDataset(input_values, labels)
-        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=12)   
+        data, labels, names =  train_data
+        data, labels = flatten_data_for_model(data, labels)
+        train_dataset = AugmentedDataset(data, labels)
+        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=8)   
         l = len(dataloader.dataset)
             
         progress_bar = tqdm(dataloader, desc=f"Training Epoch {epoch+1}/{total_epochs}")

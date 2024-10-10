@@ -9,13 +9,17 @@ import torch
 from torch.utils.data import Dataset
 import torchaudio.functional as F
 import random
+from transformers import Wav2Vec2Processor
 
 class AugmentedDataset(Dataset):
-    def __init__(self, data, labels, sample_rate=16000, augment=True):
+    def __init__(self, data, labels, processor=None, sample_rate=16000, augment=True, device='cuda', wavml =True):
         self.data = torch.tensor(data) if not isinstance(data, torch.Tensor) else data
         self.labels = torch.tensor(labels) if not isinstance(labels, torch.Tensor) else labels
+        self.processor = processor if processor else None
         self.sample_rate = sample_rate
         self.augment = augment
+        self.device = device
+        self.wavml = wavml
 
     def __len__(self):
         return len(self.data)
@@ -28,73 +32,107 @@ class AugmentedDataset(Dataset):
             signal = self.apply_data_augmentation(signal)
 
         return signal, label
-    
-    def apply_data_augmentation(self, signal, noise_prob=0.1, gain_prob=0.1, pitch_shift_prob=0.1, 
-                                lowpass_prob=0.1, highpass_prob=0.1, freq_mask_prob=0.1, time_mask_prob=0.1):
+
+    def collate_fn(self, batch):
+        signals, labels = zip(*batch)
+        signals = torch.stack(signals).to(self.device)
+        labels = torch.stack(labels).to(self.device)
+        signals = signals.squeeze(dim = 1)
+        labels = labels.squeeze(dim = 1)
+
+        if self.processor is not None:
+            # Process each item in the batch separately
+            
+
+            output = self.processor(
+                signals.cpu().numpy(), 
+                sampling_rate=self.sample_rate, 
+                return_tensors="pt", 
+                padding="longest"
+            )
+
+            # Stack the processed signals and attention masks
+            input_values =output.input_values.to(self.device)
+            
+            # Check if 'attention_mask' is in the output dictionary
+            if 'attention_mask' in output:
+                attention_mask = output.attention_mask.to(self.device)
+            else:
+                # Create an attention mask filled with ones if not present
+                attention_mask = torch.ones_like(input_values, dtype=torch.float32).to(self.device)
+
+            
+            del signals, output
+        else:
+            input_values = signals
+            attention_mask = torch.ones_like(signals).to(self.device)
+        
+        return {"input_values": input_values, "attention_mask": attention_mask}, labels
+
+    def apply_data_augmentation(self, signal):
         augmented_signal = signal.clone()
         if augmented_signal.dim() == 1:
             augmented_signal = augmented_signal.unsqueeze(0)
-        
-        if random.random() < noise_prob:
-            augmented_signal = self.apply_noise(augmented_signal)
-        
-        if random.random() < gain_prob:
-            augmented_signal = self.apply_gain(augmented_signal)
-        
-        if random.random() < pitch_shift_prob:
-            augmented_signal = self.apply_pitch_shift(augmented_signal)
-        
-        if random.random() < lowpass_prob:
-            augmented_signal = self.apply_lowpass(augmented_signal)
-        
-        if random.random() < highpass_prob:
-            augmented_signal = self.apply_highpass(augmented_signal)
-        
-        if random.random() < freq_mask_prob:
-            augmented_signal = self.apply_freq_mask(augmented_signal)
-        
-        if random.random() < time_mask_prob:
-            augmented_signal = self.apply_time_mask(augmented_signal)
-        
+
+        aug_functions = [
+            (0.1, self.apply_noise),
+            (0.1, self.apply_gain),
+            (0.1, self.apply_pitch_shift),
+            (0.1, self.apply_lowpass),
+            (0.1, self.apply_highpass),
+            (0.1, self.apply_freq_mask),
+            (0.1, self.apply_time_mask)
+        ]
+
+        for prob, func in aug_functions:
+            if random.random() < prob:
+                augmented_signal = func(augmented_signal)
+
         return augmented_signal.squeeze(0)
 
-
-
     def apply_noise(self, signal):
-        noise = torch.randn_like(signal)
-        snr = torch.tensor([random.randint(20, 30)])  # Subtle noise (high SNR)
+        noise = torch.randn_like(signal, device=self.device)
+        snr = torch.tensor([random.randint(20, 30)], device=self.device)
         return F.add_noise(signal, noise, snr)
 
     def apply_gain(self, signal):
-        gain_db = torch.tensor(random.randint(-2, 2))  # Subtle gain adjustment
+        gain_db = torch.tensor(random.randint(-2, 2), device=self.device)
         return F.gain(signal, gain_db)
 
     def apply_pitch_shift(self, signal):
-        n_steps = random.randint(-2, 2)  # Subtle pitch shift
+        n_steps = random.randint(-2, 2)
         return F.pitch_shift(signal, self.sample_rate, n_steps)
 
     def apply_lowpass(self, signal):
-        cutoff_freq = random.randint(2000, 8000)  # Subtle lowpass (high cutoff)
+        cutoff_freq = random.randint(2000, 8000)
         return F.lowpass_biquad(signal, self.sample_rate, cutoff_freq)
 
     def apply_highpass(self, signal):
-        cutoff_freq = random.randint(20, 100)  # Subtle highpass (low cutoff)
+        cutoff_freq = random.randint(20, 100)
         return F.highpass_biquad(signal, self.sample_rate, cutoff_freq)
 
     def apply_freq_mask(self, signal):
-        freq_mask_param = torch.tensor(random.randint(50, 300))  # Narrow frequency mask
+        freq_mask_param = random.randint(50, 300)
         return F.mask_along_axis(signal, freq_mask_param, 0, axis=1)
 
     def apply_time_mask(self, signal):
-        time_mask_param = random.randint(10, 20)  # Short time mask
+        time_mask_param = random.randint(10, 20)
         mask_value = 0
         return F.mask_along_axis(signal, time_mask_param, mask_value, axis=0)
     
 class CustomDataset:
-    def __init__(self, data, labels, name):
-        self.data = np.array(data) if not isinstance(data, np.ndarray) else data
-        self.labels = np.array(labels) if not isinstance(labels, np.ndarray) else labels
-        self.name = np.array(list(name.values())) if isinstance(name, dict) else np.array(name) if not isinstance(name, np.ndarray) else name
+    def __init__(self, data, labels, name, processor=None, sample_rate=16000, augment=True, device='cuda', wavml=True):
+        self.data = torch.tensor(data) if not isinstance(data, torch.Tensor) else data
+        self.labels = torch.tensor(labels) if not isinstance(labels, torch.Tensor) else labels
+        print(name)
+        self.name = np.array(list(name)) if not isinstance(name, np.ndarray) else name     
+        self.processor = processor if processor else None
+        self.sample_rate = sample_rate
+        self.augment = augment
+        self.device = device
+        self.wavml = wavml
+        self.seq_size = self.data.shape
+
 
     def __len__(self):
         return len(self.data)
@@ -103,32 +141,75 @@ class CustomDataset:
         if self.name is not None and len(self.name) > 0:
             return self.data[idx], self.labels[idx], self.name[idx]
         else:
-            return self.data[idx], self.labels[idx],"none"
+            return self.data[idx], self.labels[idx], "none"
 
+    def collate_fn(self, batch):
+        signals, labels, name = zip(*batch)
+        signals = torch.stack(signals)
+        labels = torch.stack(labels).to(self.device)
+        name = np.stack(name)
+        
+        if self.processor is not None:
+            # Process each item in the batch separately
+            
+            processed_signals = []
+            attention_masks = []
+            for i in range(signals.shape[0]):
+                output = self.processor(
+                    signals[i].cpu().numpy(), 
+                    sampling_rate=self.sample_rate, 
+                    return_tensors="pt", 
+                    padding="longest"
+                )
+                
+                processed_signals.append(output.input_values)
+                if 'attention_mask' in output:
+                    attention_mask = output.attention_mask
+                else:
+                # Create an attention mask filled with ones if not present
+                    attention_mask = torch.ones_like(output.input_values)
+                    
+                attention_masks.append(attention_mask)
+
+            # Stack the processed signals and attention masks
+            input_values = torch.stack(processed_signals)
+            attention_mask = torch.stack(attention_masks)
+            
+
+            
+            del signals, output
+        else:
+            input_values = signals
+            attention_mask = torch.ones_like(signals)
+        
+        return {"input_values": input_values, "attention_mask": attention_mask}, labels, name
+        
+    def input_values(self):
+        return self.seq_size
 
     def print_shapes(self):
-        print(f"data : {self.data.shape}, labels: {self.labels.shape}, names : {self.name.shape}")
+        print(f"data: {self.data.shape}, labels: {self.labels.shape}, names: {self.name.shape}")
 
     def pop(self, idx):
         data_item = self.data[idx]
         label_item = self.labels[idx]
         name_item = self.name[idx]
-        
-        self.data = np.delete(self.data, idx, axis=0)
-        self.labels = np.delete(self.labels, idx, axis=0)
-        self.name = np.delete(self.name, idx, axis=0)
-        
+
+        self.data = torch.cat((self.data[:idx], self.data[idx+1:]), dim=0)
+        self.labels = torch.cat((self.labels[:idx], self.labels[idx+1:]), dim=0)
+        self.name = torch.cat((self.name[:idx], self.name[idx+1:]), dim=0)
+
         return data_item, label_item, name_item
-    
+
     def pop_first_n(self, n):
         data_items = self.data[:n]
         label_items = self.labels[:n]
         name_items = self.name[:n]
-        
+
         self.data = self.data[n:]
         self.labels = self.labels[n:]
         self.name = self.name[n:]
-        
+
         return data_items, label_items, name_items
     def save(self, data_path, labels_path, names_path):
         np.save(data_path, self.data)

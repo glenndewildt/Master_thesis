@@ -4,3 +4,8 @@ __pycache__/
 DATA/
 breathing_prediction/src/slurm-*
 
+profile.json
+profile.html
+bin/micromamba
+breathing_prediction/src/profile.json
+breathing_prediction/src/profile.html

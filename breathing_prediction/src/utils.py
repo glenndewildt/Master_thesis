@@ -51,15 +51,17 @@ def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window
     prepared_test_data, prepared_test_labels, _= prepare_data(test_data, test_labels, test_dict, frame_rate, window_size * 16000, step_size * 16000)
 
     # Create custom datasets
-    train_dataset = CustomDataset(prepared_train_data, prepared_train_labels, train_dict)
-    val_dataset = CustomDataset(prepared_devel_data, prepared_devel_labels, devel_dict)
-    test_dataset = CustomDataset(prepared_test_data, prepared_test_labels, test_dict)
+    test_dataset = CustomDataset(prepared_test_data, prepared_test_labels, test_dict.values())
 
-    combined_train_data = np.concatenate((train_dataset.data, val_dataset.data), axis=0)
-    combined_train_labels = np.concatenate((train_dataset.labels, val_dataset.labels), axis=0)
-    combined_train_dict = np.concatenate((train_dataset.name, val_dataset.name), axis=0)
+    combined_train_data = np.concatenate((prepared_train_data, prepared_devel_data), axis=0)
+    combined_train_labels = np.concatenate((prepared_train_labels, prepared_devel_labels), axis=0)
+    combined_train_dict = list(train_dict.values()) + list(devel_dict.values())  
     combined_train_dataset = CustomDataset(combined_train_data, combined_train_labels, combined_train_dict)
     all_labels = pd.concat([test_labels, pd.concat([devel_labels, train_labels], axis=0)], axis=0)
+    # Remove unused variables from memory
+    del train_data, devel_data, test_data
+    del prepared_train_data, prepared_devel_data, prepared_test_data, combined_train_data, combined_train_labels, combined_train_dict
+    
     return combined_train_dataset, test_dataset, all_labels
     
 def prepare_data_model_n_vall(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size, num_val):

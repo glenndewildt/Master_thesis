@@ -34,7 +34,7 @@ from scipy.stats import norm
 from scipy.optimize import minimize
 from scipy.signal import butter, sosfilt
 from scipy import signal
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 class KalmanFilter:
     def __init__(self, initial_state_mean, state_covariance, observation_covariance):
         self.initial_state_mean = initial_state_mean
@@ -62,17 +62,18 @@ class KalmanFilter:
         return torch.stack(estimates)
 
 class Trainer:
-    def __init__(self, config, model_classes, criterion, device, bert_config, ground_labels, processor):
-        self.scaler = GradScaler()
-
+    def __init__(self, config, model_classes, criterion, device, ground_labels):
+        self.scaler = GradScaler('cuda')
+        self.wavml = False
+        self.encoder = None
+        self.processor = None
+        self.bert_config = None
         self.ground_labels = ground_labels
         self.config = config
         self.model_classes = model_classes
         self.criterion = criterion
         self.device = device
-        self.bert_config = bert_config
         self.run_dir = self._create_run_directory()
-        self.processor = processor
         self.csv_file = os.path.join(self.run_dir, "results_summary.csv")
         self._create_csv_file()
         
@@ -101,33 +102,52 @@ class Trainer:
             #writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
 
     def train(self, train_data, test_data):
+        
         #kfold = KFold(n_splits=self.config.n_folds, shuffle=True, random_state= 42)
         kfold = KFold(n_splits=self.config.n_folds)
         self.criterion = self.criterion.to("cuda")
 
         for model_name, model_class in self.model_classes.items():
             print(f"Training {model_name}...")
+            model_config = self.config.models[model_name]
+
+            if model_config["model_name"] != "microsoft/wavlm-large":
+                self.processor = AutoProcessor.from_pretrained(model_config["model_name"])
+                self.wavml = False
+
+            else: 
+                self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_config["model_name"])
+                self.wavml = True
+
+
+            self.bert_config = AutoConfig.from_pretrained(model_config["model_name"])
+            
+            if model_config["encoder"] != None:
+                self.encoder = model_config["encoder"].to(self.device)
+                    
             model_results = []
             
             writer = SummaryWriter(os.path.join(self.run_dir, f"{model_name}"))
             self.writer = writer
             for fold, (train_idx, val_idx) in enumerate(kfold.split(train_data)):
-                if fold < (self.config.n_folds -1):
-                    continue
-
                 print(f"Fold {fold + 1}/{self.config.n_folds}")
 
-                train_sampler = SubsetRandomSampler(train_idx)
-                val_sampler = SubsetRandomSampler(val_idx)
-                self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)
-                #val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler)
-
-                val_loader = DataLoader(train_data, batch_size=self.config.batch_size, sampler=val_sampler,num_workers=2)
-                test_loader = DataLoader(test_data, batch_size=(self.config.batch_size*2), num_workers=2)
-
-                model_config = self.config.models[model_name]
+                self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)                
                 model_config['output_size'] = train_data.get_output_shape()
-
+                ### prepare date for folds:
+                val_data, val_labels, val_names = train_data[val_idx]
+                test_data, test_labels, test_names = test_data[:]
+                train_data, train_labels, train_names = train_data[train_idx]
+                train_data, train_labels = flatten_data_for_model(train_data, train_labels)
+                
+                train_dataset = AugmentedDataset(train_data, train_labels , augment= False, processor=self.processor , wavml= self.wavml)
+                val_dataset = CustomDataset(val_data,val_labels,val_names, self.processor , wavml= self.wavml)
+                test_dataset = CustomDataset(test_data, test_labels, test_names , self.processor , wavml= self.wavml)
+                
+                val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size,collate_fn=val_dataset.collate_fn)
+                test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size,collate_fn=test_dataset.collate_fn)
+                train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, collate_fn=train_dataset.collate_fn) 
+                del val_data, val_labels, val_names , test_data, test_labels, test_names,  train_data, train_labels, train_names 
                 model = model_class(bert_config=self.bert_config, config=model_config)
                 model = model.to(self.device)
                 #Load from path
@@ -147,13 +167,14 @@ class Trainer:
                 early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
                 for epoch in range(self.config.epochs):
 
-                    #val_loss, val_acc , val_flat_acc, val_flat_acc_ola = self._evaluate(model, val_loader)
 
-                    train_loss, train_acc = self._train_epoch(model, train_data[train_idx], optimizer,scheduler, epoch, self.config.epochs)
-                    val_loss, val_acc , val_flat_acc, val_flat_acc_ola = self._evaluate(model, val_loader)
-                    test_loss, test_acc, test_flat_acc,  test_flat_acc_ola = self._evaluate(model, test_loader)
+                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer,scheduler, epoch, self.config.epochs)
 
-                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc, test_flat_acc_ola, val_flat_acc_ola)
+                    val_loss, val_acc , val_flat_acc = self._evaluate(model, val_loader, test_dataset.input_values())
+                    
+                    test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader, test_dataset.input_values())
+
+                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc )
                     
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
@@ -172,7 +193,7 @@ class Trainer:
                     'fold': fold,
                     'best_val_loss': best_val_loss,
                     'test_loss': test_loss,
-                    'test_acc': test_acc
+                    'test_acc': test_acc,
                 })
                 
                 self._log_to_csv(model_name, fold, best_val_loss, test_loss, test_acc)
@@ -184,57 +205,52 @@ class Trainer:
             writer.close()
             self._print_model_results(model_name, model_results, avg_results)
 
-    def _train_epoch(self, model, train_data, optimizer,scheduler, epoch, total_epochs):
+    def _train_epoch(self, model, train_data, optimizer, scheduler, epoch, total_epochs):
         model.train()
         total_loss = 0.0
         total_acc = 0.0
-        data, labels, names =  train_data
-        data, labels = flatten_data_for_model(data, labels)
-        train_dataset = AugmentedDataset(data, labels)
-        dataloader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, num_workers=8)   
-        l = len(dataloader.dataset)
-            
-        progress_bar = tqdm(dataloader, desc=f"Training Epoch {epoch+1}/{total_epochs}")
-        i = 0
+       
+
+        progress_bar = tqdm(train_data, desc=f"Training Epoch {epoch+1}/{total_epochs}")
+        
         for batch_idx, (input_values, labels) in enumerate(progress_bar):
-                        # Wait for the GPU to finish all operations before starting a new iteration
-            torch.cuda.empty_cache()  # Clear cache to free up memory
-            torch.cuda.synchronize()   # Ensure all GPU operations are completed
 
-            s = input_values.shape
-
-            input_values = np.stack(input_values, axis= 0)
-                        #input_values = input_values.reshape(input_values.shape[1], input_values.shape[-1])
-
-
-            #input_values, labels = input_values.to(self.device), labels.to(self.device) 
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                input_values = self.processor(input_values, return_tensors="pt", padding="longest", sampling_rate = 16000)
-                input_values, labels = input_values.to(self.device), labels.to(self.device) 
-                predictions = model(input_values)
+            
+            with torch.autocast(device_type='cuda'):
+                
+                if self.encoder is not None:
+                    with torch.no_grad():
+                        input_values = self.encoder(input_values["input_values"]).last_hidden_state
+                
+                predictions = model(input_values)                
                 loss = self.criterion(predictions, labels)
+            del input_values, labels
+            torch.cuda.empty_cache()
 
-            self.scaler.scale(loss).backward()  # Scale the loss and call backward
+
+            
+            self.scaler.scale(loss).backward()
             self.scaler.unscale_(optimizer)
-
-        # Since the gradients of optimizer's assigned parameters are now unscaled, clips as usual.
-        # You may use the same value for max_norm here as you would without gradient scaling.
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-            self.scaler.step(optimizer)  # Unscale gradients and call optimizer step
-            self.scaler.update()  # Update the scale for next iteration
-            scheduler.step(epoch + batch_idx / len(dataloader))
+            self.scaler.step(optimizer)
+            self.scaler.update()
+            
+            scheduler.step(epoch + batch_idx / len(train_data))
             
             total_loss += loss.item()
-            total_acc += 1.0 - loss.item()  # Assuming accuracy is 1 - loss for this task
+            total_acc += 1.0 - loss.item()
             
             progress_bar.set_description(f"Training Epoch {epoch+1}/{total_epochs}, Avg Loss: {total_loss/(batch_idx+1):.4f}, Acc: {total_acc/(batch_idx+1):.4f}")
-            optimizer.zero_grad()
-            del input_values, labels, predictions, loss
+            
+            optimizer.zero_grad(set_to_none=True)
+            
+            del predictions, loss
             torch.cuda.empty_cache()
-        
-        return total_loss / len(dataloader), total_acc / len(dataloader)
 
-    def _evaluate(self, model, dataloader):
+        
+        return total_loss / len(train_data), total_acc / len(train_data)
+
+    def _evaluate(self, model, dataloader, input_shape):
         model.eval()
         total_loss = 0.0
         total_acc = 0.0
@@ -247,9 +263,10 @@ class Trainer:
 
         with torch.no_grad():
             for input_values, labels, ground_truth_names in dataloader:
+                
                 ground_truth_labels = self._get_ground_truth_labels(ground_truth_names)
-                predictions = self._process_sequences(model, input_values)
-                loss = self.criterion(predictions.to("cpu"), labels)
+                predictions = self._process_sequences(model, input_values, input_shape=input_shape)
+                loss = self.criterion(predictions, labels)
                 total_loss += loss.item()
                 total_acc += 1.0 - loss.item()
 
@@ -258,7 +275,7 @@ class Trainer:
                     average = self._unsplit_data(predictions_np, method, ground_truth_labels.shape[-1])
                     total_acc_flat[method] += self._calculate_flattened_accuracy(average, ground_truth_labels)
 
-                del input_values, labels, predictions, loss
+                del input_values, labels, predictions, loss, ground_truth_labels
                 torch.cuda.empty_cache()
 
         num_samples = len(dataloader)
@@ -270,8 +287,55 @@ class Trainer:
         for method, acc in avg_flat_acc.items():
             print(f"Val Flat Acc ({method}): {acc:.4f}")
 
-        return avg_loss, avg_acc, 0 , 0
+        return avg_loss, avg_acc, avg_flat_acc
 
+
+    def _process_sequences(self, model, input_values, input_shape):
+        predictions = []
+        
+        for i in range(input_shape[1]):  # Iterate over the sequence dimension
+            
+            slice_input = {
+                "input_values": input_values["input_values"][:, i, :].to("cuda"),
+                "attention_mask": input_values["attention_mask"][:, i, :].to("cuda")
+            }
+            with torch.no_grad():
+                with torch.autocast(device_type='cuda'):
+                    if self.encoder is not None:
+                        # If using an encoder (e.g., Wav2Vec2Model)
+                        encoder_output = self.encoder(
+                            input_values=slice_input["input_values"],
+                            attention_mask=slice_input["attention_mask"]
+                        )
+                        slice_input = encoder_output.last_hidden_state
+                
+                    # Pass through the model
+                    pred = model(slice_input)
+                    predictions.append(pred)
+                    
+                    del slice_input , encoder_output, pred
+                    torch.cuda.empty_cache()
+
+        # Stack the predictions
+        return torch.stack(predictions, dim=1)  # Stack along the sequence dimension
+    
+    def _get_ground_truth_labels(self, ground_truth_names):
+        ground_truth_labels = []
+        for batch_name in ground_truth_names:
+            ground_truth_label = self._choose_real_labs_only_with_filenames(self.ground_labels, [batch_name])
+            ground_truth_labels.append(ground_truth_label)
+            
+        return np.array(ground_truth_labels)[:, :, -1].astype(np.float32)
+    
+    def _calculate_flattened_accuracy(self, average, ground_truth_labels):
+        s_acc = 0
+        for b in range(len(ground_truth_labels)):
+            s, _ = scipy.stats.pearsonr(average[b], ground_truth_labels[b])
+            s_acc += s
+        return s_acc / len(ground_truth_labels)
+    
+    def _choose_real_labs_only_with_filenames(self, labels, filenames):
+        return labels[labels['filename'].isin(filenames)]
 
     def _unsplit_data(self, windowed_data, method, original_length):
             original_length = original_length
@@ -293,37 +357,6 @@ class Trainer:
                 return self._unsplit_data_probabilistic(windowed_data, window_size, step_size, data_points_per_second, original_length)
             else:
                 raise ValueError(f"Unknown method: {method}")
-
-    def _get_ground_truth_labels(self, ground_truth_names):
-        ground_truth_labels = []
-        for batch_name in ground_truth_names:
-            ground_truth_label = self._choose_real_labs_only_with_filenames(self.ground_labels, [batch_name])
-            ground_truth_labels.append(ground_truth_label)
-            
-        return np.array(ground_truth_labels)[:, :, -1].astype(np.float32)
-
-    def _process_sequences(self, model, input_values):
-        predictions = []
-        for i in range(input_values.size(1)):
-    
-            slice_input = input_values[:, i, :]
-            slice_input = np.stack(slice_input, axis=0)
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                slice_input = self.processor(slice_input, return_tensors="pt", padding="longest", sampling_rate = 16000)
-                slice_input = slice_input.to(self.device)
-                pred = model(slice_input)
-            predictions.append(pred)
-        return torch.stack(predictions, dim=1)
-
-    def _calculate_flattened_accuracy(self, average, ground_truth_labels):
-        s_acc = 0
-        for b in range(len(ground_truth_labels)):
-            s, _ = scipy.stats.pearsonr(average[b], ground_truth_labels[b])
-            s_acc += s
-        return s_acc / len(ground_truth_labels)
-    
-    def _choose_real_labs_only_with_filenames(self, labels, filenames):
-        return labels[labels['filename'].isin(filenames)]
 
     def _unsplit_data_ogsize(self,windowed_data, window_size, step_size, data_points_per_second, original_length):
         # Convert to a PyTorch tensor and move to GPU
@@ -585,17 +618,18 @@ class Trainer:
         return combined_wave
 
  
-    def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc,test_flat_acc_ola, val_flat_acc_ola):
+    def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc):
         writer.add_scalar(f'Loss/train/fold_{fold}', train_loss, epoch)
         writer.add_scalar(f'Loss/val/fold_{fold}', val_loss, epoch)
         writer.add_scalar(f'Loss/test/fold_{fold}', test_loss, epoch)
         writer.add_scalar(f'Accuracy/train/fold_{fold}', train_acc, epoch)
         writer.add_scalar(f'Accuracy/val/fold_{fold}', val_acc, epoch)
         writer.add_scalar(f'Accuracy/test/fold_{fold}', test_acc, epoch)
-        writer.add_scalar(f'Accuracy_flat/test/fold_{fold}', test_flat_acc, epoch)
-        writer.add_scalar(f'Accuracy_flat/val/fold_{fold}', val_flat_acc, epoch)
-        writer.add_scalar(f'Accuracy_flat_ola/test/fold_{fold}', test_flat_acc_ola, epoch)
-        writer.add_scalar(f'Accuracy_flat_ola/val/fold_{fold}', val_flat_acc_ola, epoch)
+        for method, acc in test_flat_acc.items():
+            writer.add_scalar(f"Accuracy_flat/test/fold_{fold} ({method}):", acc)
+        for method, acc in val_flat_acc.items():
+            writer.add_scalar(f"Accuracy_flat/val/fold_{fold} ({method}):", acc)
+        
 
     def _calculate_average_results(self, model_results):
         avg_best_val_loss = np.mean([r['best_val_loss'] for r in model_results])

@@ -5,24 +5,26 @@ from losses import *
 from dataset import *
 from trainer import *
 from config import Config
+import os
+
+
 
 if __name__ == "__main__":
+
     config = Config()
-    # Define the model name
 
-    # Load the processor
-
-    #bert_config = HubertConfig.from_pretrained(config.bert_model)
-
-    # Enable Flash Attention
 
     model_classes = {
-        # "VRBModel": VRBModel,
-        # "wav2vec2_1DCNN" : Model1DCNN,
-        # "OG_1DCNN" : Model1DCNN,
-        "RespBertLSTMModel": RespBertLSTMModel,
-        # "Wav2Vec2ConvLSTMModel": Wav2Vec2ConvLSTMModel,
+        ## Recreated models
+        #"VRBModel": VRBModel, #harma paper
+        "Wav2Vec2ConvLSTMModel": Wav2Vec2ConvLSTMModel, #apple paper
+        
+        ##own proposed models useing wavml large
+        #"RespBertLSTMModel": RespBertLSTMModel,
         #"RespBertAttionModel": RespBertAttionModel,
+        ## test with print statements so you can see what happends
+        #"RespBertLSTMModel": RespBertLSTMModelTEST,
+
     }
 
     # Prepare data
@@ -33,18 +35,11 @@ if __name__ == "__main__":
         step_size=config.step_size,
     )
 
-    model_name = "patrickvonplaten/wavlm-libri-clean-100h-base-plus"
-    #model_name = "microsoft/wavlm-large"
-    #bert_config = AutoConfig.from_pretrained(model_name)
-    processor = AutoProcessor.from_pretrained(model_name)
-    bert_config = AutoConfig.from_pretrained(model_name )
-    #processor = AutoProcessor.from_pretrained(model_name)
-
     device = torch.device(
         config.device if torch.cuda.is_available() else "cpu")
     criterion = PearsonLoss()
     print(device)
 
     trainer = Trainer(config, model_classes, criterion,
-                      device, bert_config, ground_labels, processor)
+                      device, ground_labels)
     trainer.train(train_data, test_data)

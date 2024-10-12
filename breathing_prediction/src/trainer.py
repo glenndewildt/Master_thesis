@@ -35,6 +35,8 @@ from scipy.optimize import minimize
 from scipy.signal import butter, sosfilt
 from scipy import signal
 from torch.amp import GradScaler, autocast
+from colorama import Fore, Style
+import time
 class KalmanFilter:
     def __init__(self, initial_state_mean, state_covariance, observation_covariance):
         self.initial_state_mean = initial_state_mean
@@ -60,10 +62,9 @@ class KalmanFilter:
             self.update(observation)
             estimates.append(self.current_state_estimate.clone())
         return torch.stack(estimates)
-
 class Trainer:
     def __init__(self, config, model_classes, criterion, device, ground_labels):
-        self.scaler = GradScaler('cuda')
+        self.scaler = GradScaler()
         self.wavml = False
         self.encoder = None
         self.processor = None
@@ -76,7 +77,7 @@ class Trainer:
         self.run_dir = self._create_run_directory()
         self.csv_file = os.path.join(self.run_dir, "results_summary.csv")
         self._create_csv_file()
-        
+
     def _log_to_csv(self, model_name, fold, best_val_loss, test_loss, test_acc):
         with open(self.csv_file, mode='a', newline='') as file:
             writer = csv.writer(file)
@@ -101,111 +102,170 @@ class Trainer:
             writer = csv.writer(file)
             #writer.writerow(['Model', 'Fold', 'Best Val Loss', 'Test Loss', 'Test Acc'])
 
-    def train(self, train_data, test_data):
-        
-        #kfold = KFold(n_splits=self.config.n_folds, shuffle=True, random_state= 42)
+
+
+    def train(self, train_data, val_data, test_data, use_folds=True):
+
+        if use_folds:
+            self._train_with_folds(train_data, test_data)
+        else:
+            self._train_without_folds(train_data, val_data, test_data)
+
+    def _train_with_folds(self, train_data, test_data):
         kfold = KFold(n_splits=self.config.n_folds)
-        self.criterion = self.criterion.to("cuda")
 
         for model_name, model_class in self.model_classes.items():
-            print(f"Training {model_name}...")
+            print(f"Training {model_name} with k-fold cross-validation...")
             model_config = self.config.models[model_name]
+            model_config['output_size'] = train_data.labels.shape[-1]
 
-            if model_config["model_name"] != "microsoft/wavlm-large":
-                self.processor = AutoProcessor.from_pretrained(model_config["model_name"])
-                self.wavml = False
-
-            else: 
-                self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_config["model_name"])
-                self.wavml = True
-
-
-            self.bert_config = AutoConfig.from_pretrained(model_config["model_name"])
-            
-            if model_config["encoder"] != None:
-                self.encoder = model_config["encoder"].to(self.device)
-                    
-            model_results = []
+            self._setup_model(model_config)
+            train_data.wavml = self.wavml
+            test_data.wavml = self.wavml
             
             writer = SummaryWriter(os.path.join(self.run_dir, f"{model_name}"))
             self.writer = writer
+
             for fold, (train_idx, val_idx) in enumerate(kfold.split(train_data)):
                 print(f"Fold {fold + 1}/{self.config.n_folds}")
+                
+                train_dat, train_labels, train_names = train_data[train_idx]
 
-                self._log_data_used_to_csv(model_name, fold, train_idx, val_idx)                
-                model_config['output_size'] = train_data.get_output_shape()
-                ### prepare date for folds:
+                train_subset = AugmentedDataset(train_dat.reshape(-1, train_dat.shape[-1]),train_labels.reshape(-1, train_labels.shape[-1]) ,processor=self.processor,augment=False)
+                
                 val_data, val_labels, val_names = train_data[val_idx]
-                test_data, test_labels, test_names = test_data[:]
-                train_data, train_labels, train_names = train_data[train_idx]
-                train_data, train_labels = flatten_data_for_model(train_data, train_labels)
-                
-                train_dataset = AugmentedDataset(train_data, train_labels , augment= False, processor=self.processor , wavml= self.wavml)
-                val_dataset = CustomDataset(val_data,val_labels,val_names, self.processor , wavml= self.wavml)
-                test_dataset = CustomDataset(test_data, test_labels, test_names , self.processor , wavml= self.wavml)
-                
-                val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size,collate_fn=val_dataset.collate_fn)
-                test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size,collate_fn=test_dataset.collate_fn)
-                train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True, collate_fn=train_dataset.collate_fn) 
-                del val_data, val_labels, val_names , test_data, test_labels, test_names,  train_data, train_labels, train_names 
-                model = model_class(bert_config=self.bert_config, config=model_config)
-                model = model.to(self.device)
-                #Load from path
-                #/home/gdwildt/Master_thesis/breathing_prediction/results/logs/attaion_model_20_epochs_85/RespBertAttionModel_best_model_fold_6.pt
-                #/home/gdwildt/Master_thesis/breathing_prediction/results/logs/attaion_model_20_epochs_85
-                #/home/gdwildt/Master_thesis/breathing_prediction/results/logs/Attention_Waml_20_epochs_folds5/RespBertAttionModel_best_model_fold_0.pt
-                #breathing_prediction/results/logs/bi_lstm_0_7_no_adap/RespBertLSTMModel_best_model_fold_19.pt
-                #breathing_prediction/results/logs/LSTM_85_0-10/RespBertLSTMModel_best_model_fold_6.pt
-                #breathing_prediction/results/logs/bi_lstm_0-7/RespBertLSTMModel_best_model_fold_6.pt
-                #model.load_state_dict(torch.load("../results/logs/bi_lstm_0-7V2/RespBertLSTMModel_best_model_fold_6.pt", map_location=self.device))
+                val_subset = CustomDataset(val_data, val_labels,val_names , processor= self.processor)
+                test_data.processor = self.processor
 
-                optimizer = AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
-                scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)
-                
-                best_val_loss = float('inf')
-                best_model_path = None
-                early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
-                for epoch in range(self.config.epochs):
+                model = self._initialize_model(model_class, model_config)
+                optimizer = self._setup_optimizer(model)
+                scheduler = self._setup_scheduler(optimizer)
+
+                self._train_fold(model, train_subset, val_subset, test_data, optimizer, scheduler, writer, fold, model_name)
+
+            self._finalize_training(model_name, writer)
+
+    def _train_without_folds(self, train_data, val_data, test_data):
+        for model_name, model_class in self.model_classes.items():
+            print(f"Training {model_name} without k-fold cross-validation...")
+            model_config = self.config.models[model_name]
+            self._setup_model(model_config) 
+            train_data.processor =self.processor
+            val_data.processor =self.processor  
+            test_data.processor =self.processor
+            train_data.wavml = self.wavml
+            val_data.wavml = self.wavml
+            test_data.wavml = self.wavml
+
+            model_config['output_size'] = train_data.labels.shape[-1]
 
 
-                    train_loss, train_acc = self._train_epoch(model, train_loader, optimizer,scheduler, epoch, self.config.epochs)
+            writer = SummaryWriter(os.path.join(self.run_dir, f"{model_name}"))
+            self.writer = writer
 
-                    val_loss, val_acc , val_flat_acc = self._evaluate(model, val_loader, test_dataset.input_values())
-                    
-                    test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader, test_dataset.input_values())
+            model = self._initialize_model(model_class, model_config)
+            optimizer = self._setup_optimizer(model)
+            scheduler = self._setup_scheduler(optimizer)
 
-                    self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold,test_flat_acc, val_flat_acc )
-                    
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        if best_model_path:
-                            os.remove(best_model_path)
-                        best_model_path = os.path.join(self.run_dir, f"{model_name}_best_model_fold_{fold}.pt")
-                        torch.save(model.state_dict(), best_model_path)
-                    
+            self._train_fold(model, train_data, val_data, test_data, optimizer, scheduler, writer, fold=0, model_name=model_name)
 
-                                # Early stopping
-                    if early_stopping.step(val_loss):
-                        print(f"Early stopping triggered for {model_name} at epoch {epoch+1}")
-                        break
-                
-                model_results.append({
-                    'fold': fold,
-                    'best_val_loss': best_val_loss,
-                    'test_loss': test_loss,
-                    'test_acc': test_acc,
-                })
-                
-                self._log_to_csv(model_name, fold, best_val_loss, test_loss, test_acc)
+            self._finalize_training(model_name, writer)
+
+    def _setup_model(self, model_config):
+        if model_config["model_name"] != "microsoft/wavlm-large":
+            self.processor = AutoProcessor.from_pretrained(model_config["model_name"])
+            self.wavml = False
+        else:
+            self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_config["model_name"])
+            self.wavml = True
+
+        self.bert_config = AutoConfig.from_pretrained(model_config["model_name"])
+
+        
+
+        if model_config["encoder"] is not None:
+            self.encoder = model_config["encoder"].to(self.device)
+
+    def _create_subset(self, data, indices):
+        return torch.utils.data.Subset(data, indices)
+
+    def _initialize_model(self, model_class, model_config):
+        
+        model = model_class(bert_config=self.bert_config, config=model_config).to(self.device)
+        return model
+
+    def _setup_optimizer(self, model):
+        return AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
+
+    def _setup_scheduler(self, optimizer):
+        return CosineAnnealingWarmRestarts(optimizer, T_0=self.config.t0, T_mult=self.config.t_mult, eta_min=self.config.min_lr)
+
+
+
+    def _train_fold(self, model, train_data, val_data, test_data, optimizer, scheduler, writer, fold, model_name):
+        best_val_loss = float('inf')
+        early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
+
+        train_loader = DataLoader(train_data, batch_size=self.config.batch_size, shuffle=True, collate_fn=train_data.collate_fn)
+        val_loader = DataLoader(val_data, batch_size=self.config.batch_size, collate_fn=val_data.collate_fn)
+        test_loader = DataLoader(test_data, batch_size=self.config.batch_size, collate_fn=test_data.collate_fn)
+
+        progress_bar = tqdm(range(self.config.epochs), desc=f"{Fore.CYAN}Training {model_name} - Fold {fold+1}/{self.config.n_folds}{Style.RESET_ALL}")
+
+        for epoch in progress_bar:
+            start_time = time.time()
             
-            avg_results = self._calculate_average_results(model_results)
-            self._log_average_results(writer, avg_results)
-            self._log_to_csv(model_name, 'Average', avg_results['best_val_loss'], avg_results['test_loss'], avg_results['test_acc'])
-            
-            writer.close()
-            self._print_model_results(model_name, model_results, avg_results)
+            train_loss, train_acc = self._train_epoch(model, train_loader, optimizer, scheduler, epoch)
+            val_loss, val_acc, val_flat_acc = self._evaluate(model, val_loader)
+            test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader)
 
-    def _train_epoch(self, model, train_data, optimizer, scheduler, epoch, total_epochs):
+            self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc)
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                self._save_best_model(model, model_name, fold)
+
+            early_stop = early_stopping(val_loss)
+            
+            epoch_time = time.time() - start_time
+            
+            # Update progress bar description
+            progress_bar.set_description(
+                f"{Fore.CYAN}Training {model_name} - Fold {fold+1}/{self.config.n_folds}{Style.RESET_ALL} | "
+                f"{Fore.GREEN}Epoch {epoch+1}/{self.config.epochs}{Style.RESET_ALL} | "
+                f"{Fore.YELLOW}Train Loss: {train_loss:.4f}{Style.RESET_ALL} | "
+                f"{Fore.MAGENTA}Val Loss: {val_loss:.4f}{Style.RESET_ALL} | "
+                f"{Fore.BLUE}Test Loss: {test_loss:.4f}{Style.RESET_ALL} | "
+                f"{Fore.RED}Early Stop: {'Yes' if early_stop else 'No'}{Style.RESET_ALL}"
+            )
+
+            # Print additional metrics below the progress bar
+            tqdm.write(
+                f"{Fore.GREEN}Epoch {epoch+1}/{self.config.epochs}{Style.RESET_ALL} completed in {epoch_time:.2f}s\n"
+                f"  {Fore.YELLOW}Train Acc: {train_acc:.4f}{Style.RESET_ALL} | "
+                f"{Fore.MAGENTA}Val Acc: {val_acc:.4f}{Style.RESET_ALL} | "
+                f"{Fore.BLUE}Test Acc: {test_acc:.4f}{Style.RESET_ALL}\n"
+                f"  {Fore.CYAN}Val Flat Acc:{Style.RESET_ALL} {' | '.join([f'{method}: {acc:.4f}' for method, acc in val_flat_acc.items()])}\n"
+                f"  {Fore.CYAN}Test Flat Acc:{Style.RESET_ALL} {' | '.join([f'{method}: {acc:.4f}' for method, acc in test_flat_acc.items()])}"
+            )
+
+            if early_stop:
+                tqdm.write(f"{Fore.RED}Early stopping triggered at epoch {epoch+1}{Style.RESET_ALL}")
+                break
+
+        return best_val_loss, test_loss, test_acc
+    
+    def move_dict_to_device(self, d, device):
+        for key, value in d.items():
+            if isinstance(value, torch.Tensor):
+                d[key] = value.to(device)
+            elif isinstance(value, dict):
+                self.move_dict_to_device(value, device)
+        return d
+
+            
+    def _train_epoch(self, model, train_data, optimizer, scheduler, epoch):
+        total_epochs = self.config.epochs
         model.train()
         total_loss = 0.0
         total_acc = 0.0
@@ -214,8 +274,9 @@ class Trainer:
         progress_bar = tqdm(train_data, desc=f"Training Epoch {epoch+1}/{total_epochs}")
         
         for batch_idx, (input_values, labels) in enumerate(progress_bar):
-
-            
+            #labels = labels.to(self.device)
+            #input_values =  self.move_dict_to_device(input_values, self.device)
+            #input_values, labels =  input_values.to(self.device), labels.to(self.device)
             with torch.autocast(device_type='cuda'):
                 
                 if self.encoder is not None:
@@ -224,11 +285,7 @@ class Trainer:
                 
                 predictions = model(input_values)                
                 loss = self.criterion(predictions, labels)
-            del input_values, labels
-            torch.cuda.empty_cache()
-
-
-            
+            del input_values, labels         
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
@@ -242,7 +299,7 @@ class Trainer:
             
             progress_bar.set_description(f"Training Epoch {epoch+1}/{total_epochs}, Avg Loss: {total_loss/(batch_idx+1):.4f}, Acc: {total_acc/(batch_idx+1):.4f}")
             
-            optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad()
             
             del predictions, loss
             torch.cuda.empty_cache()
@@ -250,7 +307,7 @@ class Trainer:
         
         return total_loss / len(train_data), total_acc / len(train_data)
 
-    def _evaluate(self, model, dataloader, input_shape):
+    def _evaluate(self, model, dataloader):
         model.eval()
         total_loss = 0.0
         total_acc = 0.0
@@ -265,7 +322,7 @@ class Trainer:
             for input_values, labels, ground_truth_names in dataloader:
                 
                 ground_truth_labels = self._get_ground_truth_labels(ground_truth_names)
-                predictions = self._process_sequences(model, input_values, input_shape=input_shape)
+                predictions = self._process_sequences(model, input_values)
                 loss = self.criterion(predictions, labels)
                 total_loss += loss.item()
                 total_acc += 1.0 - loss.item()
@@ -290,10 +347,10 @@ class Trainer:
         return avg_loss, avg_acc, avg_flat_acc
 
 
-    def _process_sequences(self, model, input_values, input_shape):
+    def _process_sequences(self, model, input_values):
         predictions = []
         
-        for i in range(input_shape[1]):  # Iterate over the sequence dimension
+        for i in range(input_values["attention_mask"].shape[1]):  # Iterate over the sequence dimension
             
             slice_input = {
                 "input_values": input_values["input_values"][:, i, :].to("cuda"),
@@ -486,136 +543,6 @@ class Trainer:
             original_data[b] = kalman_filter.filter(original_data[b])
 
         return original_data.cpu()
-    def _unsplit_data_probabilistic(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
-        # Ensure windowed_data is a tensor on the GPU
-        windowed_data = torch.tensor(windowed_data, device='cuda')
-        batch_size, num_windows, prediction_size = windowed_data.shape
-        window_size_points = int(window_size * data_points_per_second)
-        step_size_points = int(step_size * data_points_per_second)
-
-        # Initialize tensors on GPU
-        original_data = torch.zeros((batch_size, original_length), device='cuda')
-        overlap_count = torch.zeros((batch_size, original_length), device='cuda')
-        
-        def breathing_weight(x):
-            return torch.exp(-x**2 / (2 * 0.3**2))  # Gaussian-like weight, adjust 0.3 as needed
-
-        # First pass: Identify overlap regions
-        for i in range(num_windows):
-            start = i * step_size_points
-            end = min(start + window_size_points, original_length)
-            overlap_count[:, start:end] += 1
-
-        # Second pass: Apply weighted reconstruction only in overlap regions
-        for i in range(num_windows):
-            start = i * step_size_points
-            end = min(start + window_size_points, original_length)
-            segment_length = end - start
-
-            # Create weights for this window
-            weights = breathing_weight(torch.linspace(-1, 1, segment_length, device='cuda'))
-            
-            # Identify overlap and non-overlap regions in this window
-            is_overlap = overlap_count[:, start:end] > 1
-            
-            # For overlap regions: apply weighted accumulation
-            original_data[:, start:end] += torch.where(
-                is_overlap,
-                windowed_data[:, i, :segment_length] * weights,
-                torch.zeros_like(windowed_data[:, i, :segment_length])
-            )
-            
-            # For non-overlap regions: directly copy the data
-            original_data[:, start:end] = torch.where(
-                ~is_overlap,
-                windowed_data[:, i, :segment_length],
-                original_data[:, start:end]
-            )
-
-        # Normalize only the overlapping regions
-        overlap_mask = overlap_count > 1
-        original_data[overlap_mask] /= overlap_count[overlap_mask]
-
-        return original_data.cpu().numpy()
-    def _unsplit_data_butterworth(self, windowed_data, window_size, step_size, data_points_per_second, original_length):
-        # Ensure windowed_data is a tensor on the GPU
-        windowed_data = torch.tensor(windowed_data, device='cuda')
-        batch_size, num_windows, prediction_size = windowed_data.shape
-        window_size_points = int(window_size * data_points_per_second)
-        step_size_points = int(step_size * data_points_per_second)
-
-        # Initialize tensors on GPU
-        original_data = torch.zeros((batch_size, original_length), device='cuda')
-        overlap_count = torch.zeros((batch_size, original_length), device='cuda')
-
-        # Accumulate data using windowed_data
-        for i in range(num_windows):
-            start = i * step_size_points
-            end = min(start + window_size_points, original_length)
-            segment_length = end - start
-            original_data[:, start:end] += windowed_data[:, i, :segment_length]
-            overlap_count[:, start:end] += 1
-
-        # Average the overlapping regions
-        original_data = torch.where(overlap_count != 0, original_data / overlap_count, original_data)
-
-        # Apply Butterworth filter to overlapping regions
-        for b in range(batch_size):
-            # Find contiguous overlap regions
-            overlap_indices = torch.nonzero(overlap_regions[b]).squeeze()
-            if overlap_indices.numel() > 0:
-                if overlap_indices.dim() == 0:
-                    # Only one overlap point
-                    starts = ends = overlap_indices.unsqueeze(0)
-                else:
-                    # Multiple overlap points
-                    starts = overlap_indices[:-1][(overlap_indices[1:] - overlap_indices[:-1] > 1)]
-                    ends = overlap_indices[1:][overlap_indices[1:] - overlap_indices[:-1] > 1]
-                    
-                    if len(starts) == 0:
-                        # All overlap points are contiguous
-                        starts = overlap_indices[0].unsqueeze(0)
-                        ends = overlap_indices[-1].unsqueeze(0)
-                    else:
-                        # Add first and last points if they're not included
-                        if overlap_indices[0] != starts[0]:
-                            starts = torch.cat([overlap_indices[0].unsqueeze(0), starts])
-                        if overlap_indices[-1] != ends[-1]:
-                            ends = torch.cat([ends, overlap_indices[-1].unsqueeze(0)])
-                
-                # Apply filter to each contiguous overlap region
-                for start, end in zip(starts, ends):
-                    segment = original_data[b, start:end].cpu().numpy()
-                    filtered_segment = sosfilt(sos, segment)
-                    original_data[b, start:end] = torch.from_numpy(filtered_segment).to('cuda')
-
-        return original_data.cpu().numpy()
-        
-    def sine_wave_asymmetrical(self, t, amplitude, frequency_in, frequency_out):
-        """
-        Generate an asymmetrical breathing pattern centered around 0.
-
-        Parameters:
-            t (np.ndarray): Time vector.
-            amplitude (float): Amplitude of the wave (1 for -1 to 1).
-            frequency_in (float): Frequency of inhalation (higher for faster rise).
-            frequency_out (float): Frequency of exhalation (lower for slower drop).
-
-        Returns:
-            np.ndarray: Combined breathing pattern.
-        """
-        # Sine wave for inhalation (quick rise, from -1 to 1)
-        wave_in = amplitude * (0.5 * (1 + np.sin(2 * np.pi * frequency_in * t)))  # Range 0 to 1
-        
-        # Linear function for exhalation, gradually decreasing (from 1 to -1)
-        exhalation_duration = 1 / frequency_out  # Duration based on frequency_out
-        wave_out = amplitude * (1 - (t / exhalation_duration))  # Linear drop from 1 to -1
-
-        # Combine parts to center around 0 and oscillate from -1 to 1
-        combined_wave = wave_in - (1 - wave_out)  # Inhale up, exhale down
-        combined_wave = np.clip(combined_wave, -1, 1)  # Clip to the range -1 to 1
-
-        return combined_wave
 
  
     def _log_metrics(self, writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc):

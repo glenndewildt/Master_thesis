@@ -34,16 +34,15 @@ class AugmentedDataset(Dataset):
         return signal, label
 
     def collate_fn(self, batch):
+        batch = batch
         signals, labels = zip(*batch)
-        signals = torch.stack(signals).to(self.device)
-        labels = torch.stack(labels).to(self.device)
-        signals = signals.squeeze(dim = 1)
-        labels = labels.squeeze(dim = 1)
+        signals = torch.stack(signals).to('cuda')
+        labels = torch.stack(labels).to('cuda')
+        signals = signals.squeeze(dim=1)
+        labels = labels.squeeze(dim=1)
 
         if self.processor is not None:
             # Process each item in the batch separately
-            
-
             output = self.processor(
                 signals.cpu().numpy(), 
                 sampling_rate=self.sample_rate, 
@@ -52,20 +51,19 @@ class AugmentedDataset(Dataset):
             )
 
             # Stack the processed signals and attention masks
-            input_values =output.input_values.to(self.device)
+            input_values = output.input_values.to('cuda')
             
             # Check if 'attention_mask' is in the output dictionary
             if 'attention_mask' in output:
-                attention_mask = output.attention_mask.to(self.device)
+                attention_mask = output.attention_mask.to('cuda')
             else:
                 # Create an attention mask filled with ones if not present
-                attention_mask = torch.ones_like(input_values, dtype=torch.float32).to(self.device)
+                attention_mask = torch.ones_like(input_values, dtype=torch.float32).to('cuda')
 
-            
             del signals, output
         else:
             input_values = signals
-            attention_mask = torch.ones_like(signals).to(self.device)
+            attention_mask = torch.ones_like(signals).to('cuda')
         
         return {"input_values": input_values, "attention_mask": attention_mask}, labels
 
@@ -91,12 +89,12 @@ class AugmentedDataset(Dataset):
         return augmented_signal.squeeze(0)
 
     def apply_noise(self, signal):
-        noise = torch.randn_like(signal, device=self.device)
-        snr = torch.tensor([random.randint(20, 30)], device=self.device)
+        noise = torch.randn_like(signal)
+        snr = torch.tensor([random.randint(20, 30)])
         return F.add_noise(signal, noise, snr)
 
     def apply_gain(self, signal):
-        gain_db = torch.tensor(random.randint(-2, 2), device=self.device)
+        gain_db = torch.tensor(random.randint(-2, 2))
         return F.gain(signal, gain_db)
 
     def apply_pitch_shift(self, signal):

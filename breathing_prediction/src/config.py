@@ -17,7 +17,7 @@ class Config:
     
     ## Train parameters
     epochs = 60
-    batch_size = 5
+    batch_size = 1
     patience = 15
     learning_rate = 5e-4
     weight_decay = 0.01

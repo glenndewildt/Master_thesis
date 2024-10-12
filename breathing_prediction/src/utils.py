@@ -39,7 +39,7 @@ class EarlyStopping:
         return False
 
     
-def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size):
+def prepare_data_model_fold(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size):
     # Load and prepare data
     train_data, train_labels, train_dict, frame_rate = load_data(audio_interspeech_norm, breath_interspeech_folder, 'train')
     devel_data, devel_labels, devel_dict, _ = load_data(audio_interspeech_norm, breath_interspeech_folder, 'devel')
@@ -63,8 +63,8 @@ def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window
     del prepared_train_data, prepared_devel_data, prepared_test_data, combined_train_data, combined_train_labels, combined_train_dict
     
     return combined_train_dataset, test_dataset, all_labels
-    
-def prepare_data_model_n_vall(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size, num_val):
+
+def prepare_data_model(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size):
     # Load and prepare data
     train_data, train_labels, train_dict, frame_rate = load_data(audio_interspeech_norm, breath_interspeech_folder, 'train')
     devel_data, devel_labels, devel_dict, _ = load_data(audio_interspeech_norm, breath_interspeech_folder, 'devel')
@@ -76,24 +76,17 @@ def prepare_data_model_n_vall(audio_interspeech_norm, breath_interspeech_folder,
     prepared_test_data, prepared_test_labels, _= prepare_data(test_data, test_labels, test_dict, frame_rate, window_size * 16000, step_size * 16000)
 
     # Create custom datasets
-    train_dataset = CustomDataset(prepared_train_data, prepared_train_labels, train_dict)
-    val_dataset = CustomDataset(prepared_devel_data, prepared_devel_labels, devel_dict)
-    test_dataset = CustomDataset(prepared_test_data, prepared_test_labels, test_dict)
-    train_dataset.print_shapes()
-    val_dataset.print_shapes()
-    print(num_val)
-    new_val_dataset_item = val_dataset.pop_first_n(num_val)
-    new_val_dataset = CustomDataset(new_val_dataset_item[0], new_val_dataset_item[1], new_val_dataset_item[2])
-    new_val_dataset.print_shapes()
+    test_dataset = CustomDataset(prepared_test_data, prepared_test_labels, test_dict.values())
+    train_dataset = AugmentedDataset(prepared_train_data.reshape(-1, prepared_train_data.shape[-1]), prepared_train_labels.reshape(-1, prepared_train_labels.shape[-1]), augment=True)
+    develop_dataset = CustomDataset(prepared_devel_data, prepared_devel_labels, devel_dict.values())
 
-    combined_train_data = np.concatenate((train_dataset.data, val_dataset.data), axis=0)
-    combined_train_labels = np.concatenate((train_dataset.labels, val_dataset.labels), axis=0)
-    combined_train_dict = np.concatenate((train_dataset.name, val_dataset.name), axis=0)
-    combined_train_data, combined_train_labels = flatten_data_for_model(combined_train_data, combined_train_labels)
-    combined_train_dataset = CustomDataset(combined_train_data, combined_train_labels, [])
     all_labels = pd.concat([test_labels, pd.concat([devel_labels, train_labels], axis=0)], axis=0)
-
-    return combined_train_dataset, new_val_dataset, test_dataset, all_labels
+    # Remove unused variables from memory
+    del train_data, devel_data, test_data
+    del prepared_train_data, prepared_devel_data, prepared_test_data
+    
+    return train_dataset, develop_dataset, test_dataset, all_labels
+    
 
 def load_data(path_to_data, path_to_labels, prefix):
     # labels

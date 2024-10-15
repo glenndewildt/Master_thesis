@@ -17,10 +17,10 @@ if __name__ == "__main__":
     model_classes = {
         ## Recreated models
         #"VRBModel": VRBModel, #harma paper
-        #"Wav2Vec2ConvLSTMModel": Wav2Vec2ConvLSTMModel, #apple paper
+        "Wav2Vec2ConvLSTMModel": Wav2Vec2ConvLSTMModel, #apple paper
         
         ##own proposed models useing wavml large
-        "RespBertLSTMModel": RespBertLSTMModel,
+        #"RespBertLSTMModel": RespBertLSTMModel,
         #"RespBertAttionModel": RespBertAttionModel,
         ## test with print statements so you can see what happends
         #"RespBertLSTMModel": RespBertLSTMModelTEST,

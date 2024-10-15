@@ -24,6 +24,8 @@ from flash_attn.bert_padding import unpad_input, pad_input
 
 
 ##BASED IN APPLE PAPER
+## question1 : I use only the last layer from the lstm, is this a good assumtion?
+## they say they make use of a ebedding layer with 128 so did add that before the final layer but also not sure they ment that this way 
 class Wav2Vec2ConvLSTMModel(nn.Module):
     def __init__(self, bert_config = None, config = None):
         super(Wav2Vec2ConvLSTMModel, self).__init__()
@@ -56,7 +58,9 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
         
         return x
     
-##BASED ON VRB HARMA2023 PAPER    
+##BASED ON VRB HARMA2023 PAPER 
+## Question1 : Again do i only use the last layer of the GRU, it has a output of 64 so seems a little small, the output has 400 as output shape i would say that for each timestep but could not find it   
+## Question2 : there was not descriped a activation function, and a dense layer for the output.
 class VRBModel(nn.Module):
     def __init__(self, bert_config = None, config = None):
         super(VRBModel, self).__init__()
@@ -67,7 +71,6 @@ class VRBModel(nn.Module):
                           num_layers=config['n_gru'],
                           batch_first=True)
         self.embedding = nn.Linear(config['hidden_units'], config['output_size'])
-        self.tanh = nn.Tanh()
         self.flatten = nn.Flatten()       
     
     def forward(self, input_values):
@@ -75,8 +78,7 @@ class VRBModel(nn.Module):
         gru_out, _ = self.gru(input_values)      
         last_time_step = gru_out[:, -1, :]     
         embed = self.embedding(last_time_step)
-        x = self.tanh(embed)
-        x = self.flatten(x)
+        x = self.flatten(embed)
         return x
     
 

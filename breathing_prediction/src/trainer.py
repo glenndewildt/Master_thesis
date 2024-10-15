@@ -274,6 +274,7 @@ class Trainer:
         progress_bar = tqdm(train_data, desc=f"Training Epoch {epoch+1}/{total_epochs}")
         
         for batch_idx, (input_values, labels) in enumerate(progress_bar):
+
             #labels = labels.to(self.device)
             #input_values =  self.move_dict_to_device(input_values, self.device)
             #input_values, labels =  input_values.to(self.device), labels.to(self.device)

@@ -15,7 +15,7 @@ from scipy.io import wavfile
 from scipy.stats import pearsonr
 from tqdm import tqdm
 from sklearn.model_selection import KFold
-from dataset import *
+from pt_dataset import *
 
 class EarlyStopping:
     def __init__(self, patience=7, mode='min', delta=0):
@@ -49,7 +49,47 @@ class EarlyStopping:
         
         return self.early_stop
 
+def unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_second, original_length):
+    # Convert to a PyTorch tensor and move to GPU
 
+    # if isinstance(windowed_data, np.ndarray):
+    #     windowed_data = tf.Tensor(windowed_data)  # Use 'cuda' for GPU
+
+    window_size_points = window_size * data_points_per_second
+    step_size_points = step_size * data_points_per_second
+    batch_size, num_windows, data_lenght = windowed_data.shape
+    
+    original_data = np.zeros((batch_size, original_length))
+    overlap_count = np.zeros((batch_size, original_length))
+
+    def process_batch(batch_index):
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = start + window_size_points
+            if end > original_length:
+                end = original_length
+            segment_length = end - start
+
+            # Update original data and overlap count
+            original_data[batch_index, start:end] += windowed_data[batch_index, i, :segment_length]
+            overlap_count[batch_index, start:end] += 1
+
+    # Use Torch's built-in parallelism
+    for b in range(batch_size):
+        process_batch(b)
+
+    # Average the overlapping regions
+    original_data = np.where(overlap_count != 0, original_data / overlap_count, np.zeros_like(original_data))
+
+    # Trim the data to match the original length
+    original_data = original_data[:, :original_length]
+
+    return original_data
+
+def reshaping_data_for_model(data, labels):
+    result_data=data.reshape((-1,data.shape[2]))
+    result_labels=labels.reshape((-1,labels.shape[2]))
+    return result_data, result_labels
     
 def prepare_data_model_fold(audio_interspeech_norm, breath_interspeech_folder, window_size, step_size):
     # Load and prepare data
@@ -291,11 +331,13 @@ def correlation_coefficient_loss(y_true, y_pred):
     sqrt_x = torch.sqrt(sum_square_x)
     sqrt_y = torch.sqrt(sum_square_y)
     r_den=torch.multiply(sqrt_x, sqrt_y)
-    result=torch.divide(r_num, r_den)
+    r=torch.divide(r_num, r_den)
     #tf.print('result:', result)
-    result=torch.mean(result)
+    r=torch.mean(r)
     #tf.print('mean result:', result)
-    return 1 - result
+    r = torch.where(torch.isnan(r), torch.zeros_like(r), r)
+
+    return 1 - r
 
 def concatenate_prediction(true_values, predicted_values, timesteps_labels, class_dict):
     predicted_values=predicted_values.reshape(timesteps_labels.shape)

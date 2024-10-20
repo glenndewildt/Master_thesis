@@ -205,26 +205,31 @@ class Trainer:
     def _train_fold(self, model, train_data, val_data, test_data, optimizer, scheduler, writer, fold, model_name):
         best_val_loss = float('inf')
         early_stopping = EarlyStopping(patience=self.config.patience, mode='min')
-
         train_loader = DataLoader(train_data, batch_size=self.config.batch_size, shuffle=True, collate_fn=train_data.collate_fn)
         val_loader = DataLoader(val_data, batch_size=self.config.batch_size, collate_fn=val_data.collate_fn)
         test_loader = DataLoader(test_data, batch_size=self.config.batch_size, collate_fn=test_data.collate_fn)
-
+        
         progress_bar = tqdm(range(self.config.epochs), desc=f"{Fore.CYAN}Training {model_name} - Fold {fold+1}/{self.config.n_folds}{Style.RESET_ALL}")
-
+        
+        best_model_state = None
+        
         for epoch in progress_bar:
             start_time = time.time()
             
             train_loss, train_acc = self._train_epoch(model, train_loader, optimizer, scheduler, epoch)
             val_loss, val_acc, val_flat_acc = self._evaluate(model, val_loader)
             test_loss, test_acc, test_flat_acc = self._evaluate(model, test_loader)
-
+            
             self._log_metrics(writer, epoch, train_loss, val_loss, test_loss, train_acc, val_acc, test_acc, fold, test_flat_acc, val_flat_acc)
-
+            
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self._save_best_model(model, model_name, fold)
-
+                best_model_state = model.state_dict()
+                self._save_model(model, f"best_{model_name}_{fold}")
+            else:
+                # Reset model weights to the best known configuration
+                model.load_state_dict(best_model_state)
+            
             early_stop = early_stopping(val_loss)
             
             epoch_time = time.time() - start_time
@@ -238,21 +243,23 @@ class Trainer:
                 f"{Fore.BLUE}Test Loss: {test_loss:.4f}{Style.RESET_ALL} | "
                 f"{Fore.RED}Early Stop: {'Yes' if early_stop else 'No'}{Style.RESET_ALL}"
             )
-
+            
             # Print additional metrics below the progress bar
             tqdm.write(
                 f"{Fore.GREEN}Epoch {epoch+1}/{self.config.epochs}{Style.RESET_ALL} completed in {epoch_time:.2f}s\n"
-                f"  {Fore.YELLOW}Train Acc: {train_acc:.4f}{Style.RESET_ALL} | "
+                f" {Fore.YELLOW}Train Acc: {train_acc:.4f}{Style.RESET_ALL} | "
                 f"{Fore.MAGENTA}Val Acc: {val_acc:.4f}{Style.RESET_ALL} | "
                 f"{Fore.BLUE}Test Acc: {test_acc:.4f}{Style.RESET_ALL}\n"
-                f"  {Fore.CYAN}Val Flat Acc:{Style.RESET_ALL} {' | '.join([f'{method}: {acc:.4f}' for method, acc in val_flat_acc.items()])}\n"
-                f"  {Fore.CYAN}Test Flat Acc:{Style.RESET_ALL} {' | '.join([f'{method}: {acc:.4f}' for method, acc in test_flat_acc.items()])}"
+                f" {Fore.CYAN}Val Flat Acc:{Style.RESET_ALL} {' | '.join([f'{method}: {acc:.4f}' for method, acc in val_flat_acc.items()])}\n"
+                f" {Fore.CYAN}Test Flat Acc:{Style.RESET_ALL} {' | '.join([f'{method}: {acc:.4f}' for method, acc in test_flat_acc.items()])}"
             )
-
+            
             if early_stop:
                 tqdm.write(f"{Fore.RED}Early stopping triggered at epoch {epoch+1}{Style.RESET_ALL}")
                 break
-
+        
+        # Load the best model before returning
+        model.load_state_dict(best_model_state)
         return best_val_loss, test_loss, test_acc
     
     def move_dict_to_device(self, d, device):
@@ -275,8 +282,8 @@ class Trainer:
         
         for batch_idx, (input_values, labels) in enumerate(progress_bar):
 
-            #labels = labels.to(self.device)
-            #input_values =  self.move_dict_to_device(input_values, self.device)
+            labels = labels.to(self.device)
+            input_values =  self.move_dict_to_device(input_values, self.device)
             #input_values, labels =  input_values.to(self.device), labels.to(self.device)
             with torch.autocast(device_type='cuda'):
                 
@@ -583,6 +590,6 @@ class Trainer:
             print(f"Fold {result['fold']}: Best Val Loss: {result['best_val_loss']:.4f}, Test Loss: {result['test_loss']:.4f}, Test Acc: {result['test_acc']:.4f}")
         
     def _save_model(self, model, filename):
-        path = os.path.join(self.model_save_dir, filename)
+        path = os.path.join(self.run_dir, filename)
         torch.save(model.state_dict(), path)
         print(f"Saved model to {path}")

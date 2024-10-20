@@ -36,8 +36,8 @@ class AugmentedDataset(Dataset):
     def collate_fn(self, batch):
         batch = batch
         signals, labels = zip(*batch)
-        signals = torch.stack(signals).to('cuda')
-        labels = torch.stack(labels).to('cuda')
+        signals = torch.stack(signals)
+        labels = torch.stack(labels)
         signals = signals.squeeze(dim=1)
         labels = labels.squeeze(dim=1)
 
@@ -51,19 +51,19 @@ class AugmentedDataset(Dataset):
             )
 
             # Stack the processed signals and attention masks
-            input_values = output.input_values.to('cuda')
+            input_values = output.input_values
             
             # Check if 'attention_mask' is in the output dictionary
             if 'attention_mask' in output:
-                attention_mask = output.attention_mask.to('cuda')
+                attention_mask = output.attention_mask
             else:
                 # Create an attention mask filled with ones if not present
-                attention_mask = torch.ones_like(input_values, dtype=torch.float32).to('cuda')
+                attention_mask = torch.ones_like(input_values, dtype=torch.float32)
 
             del signals, output
         else:
             input_values = signals
-            attention_mask = torch.ones_like(signals).to('cuda')
+            attention_mask = torch.ones_like(signals)
         
         return {"input_values": input_values, "attention_mask": attention_mask}, labels
 

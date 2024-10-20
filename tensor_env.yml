@@ -1,4 +1,4 @@
-name: /home/glenn/micromamba/envs/mthesis
+name: tensor_thesis
 channels:
   - pytorch
   - nvidia
@@ -775,4 +775,3 @@ dependencies:
       - nvidia-nccl-cu12==2.19.3
       - nvidia-nvjitlink-cu12==12.3.101
       - pip==24.2
-prefix: /home/glenn/micromamba/envs/mthesis

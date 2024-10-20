@@ -1,29 +1,77 @@
 ### train.import os
-import tensorflow as tf
 import pandas as pd
 import numpy as np
 import scipy
-from keras import Sequential
-from keras.layers import Conv1D, MaxPool1D, LSTM, Dense, Dropout, Flatten, TimeDistributed, MultiHeadAttention, LayerNormalization
 from matplotlib import pyplot as plt
 from scipy.io import wavfile
 from scipy.stats import pearsonr
 from sklearn.preprocessing import StandardScaler
 from scipy.signal import resample
 import librosa
-from tensorflow.keras import backend as K
-from tensorflow.keras.models import Model
+import tensorflow as tf
+from tensorflow import keras
+from keras.saving import register_keras_serializable
 
-from tensorflow.keras.layers import Layer, Reshape, Flatten, Concatenate
-import soundfile as sf
-# Load the smaller pretrained HuBERT base model and processor
+from keras import saving
+def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0):
+    # Multi-Head Self Attention
+    attention_output = tf.keras.layers.MultiHeadAttention(
+        key_dim=head_size, num_heads=num_heads, dropout=dropout
+    )(inputs, inputs)
+    # Add & Norm
+    attention_output = tf.keras.layers.LayerNormalization(epsilon=1e-6)(
+        inputs + attention_output
+    )
+    # Feedforward Network
+    ff_output = tf.keras.layers.Dense(ff_dim, activation="relu")(attention_output)
+    ff_output = tf.keras.layers.Dropout(dropout)(ff_output)
+    ff_output = tf.keras.layers.Dense(inputs.shape[-1])(ff_output)
+    # Add & Norm
+    return tf.keras.layers.LayerNormalization(epsilon=1e-6)(ff_output + attention_output)
 
-import numpy as np
-from keras.models import Sequential
-from keras.layers import GRU, Dense
-from tensorflow.keras import layers
+def create_1dcnn_with_transformer(input_shape):
+    inputs = tf.keras.layers.Input(shape=input_shape)
+    
+    # Conv1D Layers
+    x = tf.keras.layers.Conv1D(filters=64, kernel_size=10, strides=1, activation='relu', padding='same')(inputs)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    x = tf.keras.layers.MaxPool1D(pool_size=10)(x)
+    
+    x = tf.keras.layers.Conv1D(filters=128, kernel_size=8, strides=1, activation='relu', padding='same')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    x = tf.keras.layers.MaxPool1D(pool_size=4)(x)
+    
+    x = tf.keras.layers.Conv1D(filters=256, kernel_size=6, strides=1, activation='relu', padding='same')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    x = tf.keras.layers.MaxPool1D(pool_size=4)(x)
+    
+    x = tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same')(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    x = tf.keras.layers.AvgPool1D(pool_size=4)(x)
 
+    
+    # Transformer Encoder Layer
+    x = transformer_encoder(x, head_size=32, num_heads=16, ff_dim=512, dropout=0.1)
+    x = transformer_encoder(x, head_size=32, num_heads=16, ff_dim=512, dropout=0.1)
 
+    print(x.shape)
+    x = tf.keras.layers.Conv1D(filters=256, kernel_size=3, strides=1, activation='relu', padding='same')(x)
+    print(x.shape)
+    x= tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.1, recurrent_dropout=0.1)(x)
+    x= tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.1, recurrent_dropout=0.1)(x)
+
+    print(x.shape)
+    # Output layer for sequence regression (400 time steps)
+    outputs = tf.keras.layers.Dense(1, activation='tanh')(x)
+    outputs = tf.keras.layers.Flatten()(outputs)
+
+    print(outputs.shape)
+
+    # Build the final model
+    model = tf.keras.Model(inputs, outputs)
+    print(model.summary())
+
+    return model
 
 
 def how_many_windows(total_length, window_size, step_size):
@@ -138,6 +186,49 @@ def sample_minmax_normalization(data, min=None, max=None):
 
 def create_1dcnn(input_shape):
     model=tf.keras.Sequential()
+    model.add(tf.keras.layers.Conv1D(input_shape=input_shape, filters=256, kernel_size=10, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=10))
+    model.add(tf.keras.layers.Conv1D(filters=512, kernel_size=8, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=1024, kernel_size=6, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=1024, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.AvgPool1D(pool_size=4))
+    model.add(tf.keras.layers.LSTM(1024, return_sequences=True))
+    model.add(tf.keras.layers.LSTM(1024, return_sequences=True))
+    model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1, activation='tanh')))
+    model.add(tf.keras.layers.Flatten())
+    print(model.summary())
+    return model
+
+def create_1dcnn_lstm_arch(input_shape):
+    model=tf.keras.Sequential()
+    model.add(tf.keras.layers.Conv1D(input_shape=input_shape, filters=64, kernel_size=10, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=10))
+    model.add(tf.keras.layers.Conv1D(filters=128, kernel_size=8, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=258, kernel_size=6, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=258, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.AvgPool1D(pool_size=4))
+    model.add(tf.keras.layers.LSTM(258, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))
+    model.add(tf.keras.layers.LSTM(258, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))
+    model.add(tf.keras.layers.LSTM(258, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))
+    model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1, activation='tanh')))
+    model.add(tf.keras.layers.Flatten())
+    print(model.summary())
+    return model
+
+def create_1dcnn_lstm_cnn_arch(input_shape):
+    model=tf.keras.Sequential()
     model.add(tf.keras.layers.Conv1D(input_shape=input_shape, filters=64, kernel_size=10, strides=1, activation='relu', padding='same'))
     model.add(tf.keras.layers.Dropout(0.3))
     model.add(tf.keras.layers.MaxPool1D(pool_size=10))
@@ -150,6 +241,56 @@ def create_1dcnn(input_shape):
     model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'       ))
     model.add(tf.keras.layers.Dropout(0.3))
     model.add(tf.keras.layers.AvgPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.2))
+    model.add(tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))
+    model.add(tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))
+    model.add(tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2))
+    model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1, activation='tanh')))
+    model.add(tf.keras.layers.Flatten())
+    print(model.summary())
+    return model
+
+def create_1dcnn_bilstm_cnn_arch(input_shape):
+    model=tf.keras.Sequential()
+    model.add(tf.keras.layers.Conv1D(input_shape=input_shape, filters=64, kernel_size=10, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=10))
+    model.add(tf.keras.layers.Conv1D(filters=128, kernel_size=8, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=6, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.AvgPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.2))
+    model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)))
+    model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)))
+    model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)))
+    model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1, activation='tanh')))
+    model.add(tf.keras.layers.Flatten())
+    print(model.summary())
+    return model
+
+def create_1dcnn_arch(input_shape):
+    model=tf.keras.Sequential()
+    model.add(tf.keras.layers.Conv1D(input_shape=input_shape, filters=64, kernel_size=10, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=10))
+    model.add(tf.keras.layers.Conv1D(filters=128, kernel_size=8, strides=1, activation='relu', padding='same'))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=6, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.MaxPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.AvgPool1D(pool_size=4))
+    model.add(tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'       ))
+    model.add(tf.keras.layers.Dropout(0.3))
     model.add(tf.keras.layers.LSTM(256, return_sequences=True))
     model.add(tf.keras.layers.LSTM(256, return_sequences=True))
     model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1, activation='tanh')))
@@ -157,28 +298,39 @@ def create_1dcnn(input_shape):
     print(model.summary())
     return model
 
-
-
-def correlation_coefficient_accuracy(y_true, y_pred):
-    #squeezed_tensor = tf.squeeze(y_true, axis=-1)
-
-    x = y_true
-    y = y_pred
-    mx = K.mean(x, axis=1, keepdims=True)
-    my = K.mean(y, axis=1, keepdims=True)
-    xm, ym = x - mx, y - my
-    r_num = K.sum(tf.multiply(xm, ym), axis=1)
-    sum_square_x = K.sum(K.square(xm), axis=1)
-    sum_square_y = K.sum(K.square(ym), axis=1)
-    sqrt_x = tf.sqrt(sum_square_x)
-    sqrt_y = tf.sqrt(sum_square_y)
-    r_den = tf.multiply(sqrt_x, sqrt_y)
-    r = tf.divide(r_num, r_den)
-    # To avoid NaN in division, we handle the case when r_den is 0
-    r = tf.where(tf.math.is_nan(r), tf.zeros_like(r), r)
-    return K.mean(r)
-
-
+def create_cnn_bilstm_arch(input_shape):
+    model = tf.keras.Sequential([
+        # CNN layers
+        tf.keras.layers.Conv1D(input_shape=input_shape, filters=64, kernel_size=10, strides=1, activation='relu', padding='same'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.MaxPool1D(pool_size=10),
+        
+        tf.keras.layers.Conv1D(filters=128, kernel_size=8, strides=1, activation='relu', padding='same'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.MaxPool1D(pool_size=4),
+        
+        tf.keras.layers.Conv1D(filters=256, kernel_size=6, strides=1, activation='relu', padding='same'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.MaxPool1D(pool_size=4),
+        
+        tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'),
+        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.AvgPool1D(pool_size=4),
+        
+        tf.keras.layers.Conv1D(filters=256, kernel_size=5, strides=1, activation='relu', padding='same'),
+        tf.keras.layers.Dropout(0.3),
+        
+        # BiLSTM layers
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True)),
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True)),
+        
+        # Output layer
+        tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1, activation='tanh')),
+        tf.keras.layers.Flatten()
+    ])
+    
+    model.summary()
+    return model
 
 def create_model_parems(input_shape, filters_list, kernel_size_list, dropout_rate_list, pool_size_list, lstm_units_list, activation_list, final_activation):
     model = tf.keras.Sequential()
@@ -210,24 +362,98 @@ def create_model_parems(input_shape, filters_list, kernel_size_list, dropout_rat
     
     return model
 
+@register_keras_serializable()
+def correlation_coefficient_accuracy(y_true, y_pred):
+    # Mean of true and predicted values
+    mx = tf.reduce_mean(y_true, axis=1, keepdims=True)
+    my = tf.reduce_mean(y_pred, axis=1, keepdims=True)
 
-def correlation_coefficient_loss(y_true, y_pred):
-    x=y_true
-    y=y_pred
-    mx=K.mean(x, axis=1, keepdims=True)
-    my=K.mean(y, axis=1, keepdims=True)
-    xm,ym=x-mx,y-my
-    r_num=K.sum(tf.multiply(xm, ym), axis=1)
-    sum_square_x=K.sum(K.square(xm), axis=1)
-    sum_square_y = K.sum(K.square(ym), axis=1)
+    # Centered values
+    xm = y_true - mx
+    ym = y_pred - my
+
+    # Numerator of the correlation coefficient
+    r_num = tf.reduce_sum(xm * ym, axis=1)
+
+    # Denominator of the correlation coefficient
+    sum_square_x = tf.reduce_sum(tf.square(xm), axis=1)
+    sum_square_y = tf.reduce_sum(tf.square(ym), axis=1)
+    
     sqrt_x = tf.sqrt(sum_square_x)
     sqrt_y = tf.sqrt(sum_square_y)
-    r_den=tf.multiply(sqrt_x, sqrt_y)
-    result=tf.divide(r_num, r_den)
-    #tf.print('result:', result)
-    result=K.mean(result)
-    #tf.print('mean result:', result)
+
+    r_den = sqrt_x * sqrt_y
+
+    # Calculate correlation coefficient
+    result = r_num / r_den
+    
+    # Mean of the correlation coefficient
+    result = tf.reduce_mean(result)
+
+    return result
+
+@register_keras_serializable()
+def correlation_coefficient_loss(y_true, y_pred):
+    # Mean of true and predicted values
+    mx = tf.reduce_mean(y_true, axis=1, keepdims=True)
+    my = tf.reduce_mean(y_pred, axis=1, keepdims=True)
+
+    # Centered values
+    xm = y_true - mx
+    ym = y_pred - my
+
+    # Numerator of the correlation coefficient
+    r_num = tf.reduce_sum(xm * ym, axis=1)
+
+    # Denominator of the correlation coefficient
+    sum_square_x = tf.reduce_sum(tf.square(xm), axis=1)
+    sum_square_y = tf.reduce_sum(tf.square(ym), axis=1)
+    
+    sqrt_x = tf.sqrt(sum_square_x)
+    sqrt_y = tf.sqrt(sum_square_y)
+
+    r_den = sqrt_x * sqrt_y
+
+    # Calculate correlation coefficient
+    result = r_num / r_den
+    
+    # Mean of the correlation coefficient
+    result = tf.reduce_mean(result)
+
+    # Return 1 - correlation coefficient
     return 1 - result
+
+@register_keras_serializable()
+def concordance_correlation_coefficient_loss(y_true, y_pred):
+    # Mean of true and predicted values
+    mean_true = tf.reduce_mean(y_true, axis=1, keepdims=True)
+    mean_pred = tf.reduce_mean(y_pred, axis=1, keepdims=True)
+    
+    # Variance of true and predicted values
+    var_true = tf.reduce_mean(tf.square(y_true - mean_true), axis=1) + tf.keras.backend.epsilon()  # Add epsilon to prevent div by zero
+    var_pred = tf.reduce_mean(tf.square(y_pred - mean_pred), axis=1) + tf.keras.backend.epsilon()
+    
+    # Covariance between true and predicted values
+    covariance = tf.reduce_mean((y_true - mean_true) * (y_pred - mean_pred), axis=1)
+    
+    # CCC numerator: 2 * covariance
+    ccc_num = 2 * covariance
+    
+    # CCC denominator: var_true + var_pred + (mean_true - mean_pred)^2
+    ccc_den = var_true + var_pred + tf.square(mean_true - mean_pred)
+    
+    # CCC calculation
+    ccc = ccc_num / ccc_den
+    
+    # Handle NaN values (in case of zero denominator)
+    ccc = tf.where(tf.math.is_nan(ccc), tf.zeros_like(ccc), ccc)
+    
+    # Loss is 1 - CCC
+    ccc_loss = 1 - tf.reduce_mean(ccc)
+    
+    return ccc_loss
+
+
 
 def pearson_coef(y_true, y_pred):
     return scipy.stats.pearsonr(y_true, y_pred)

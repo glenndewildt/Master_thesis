@@ -178,10 +178,12 @@ def train(path_to_data, path_to_labels, window_size = 16, step_size =2/5, data_p
         print(f"  {key}: {value}")
 
 if __name__ == "__main__":
-    path = "/home/glenn/Downloads/ComParE2020_Breathing"
+    path = "/home/glenn/Downloads/"
+    path  = "../DATA/"
+
     train(
-        path_to_data=path+"/wav/",
-        path_to_labels=path+"/lab/",
+        path_to_data=path+"ComParE2020_Breathing/wav/",
+        path_to_labels=path+"ComParE2020_Breathing/lab/",
         window_size=16,
         batch_size=4
     )

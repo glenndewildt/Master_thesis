@@ -4,20 +4,20 @@ from transformers import (
 class Config:
 
     # Data parameters
-    #home = "/home/glenn/Downloads"
-    home = "../../DATA"
+    home = "/home/glenn/Downloads"
+    #home = "../../DATA"
 
     audio_interspeech_norm = home+"/ComParE2020_Breathing/wav/"
     breath_interspeech_folder = home+"/ComParE2020_Breathing/lab/"
     window_size = 30
     step_size = 4
-    n_folds = 4
+    n_folds = 7
     device = "cuda"
     data_points_per_second = 25
     
     ## Train parameters
     epochs = 60
-    batch_size = 17
+    batch_size = 1
     patience = 15
     learning_rate = 5e-4
     weight_decay = 0.01

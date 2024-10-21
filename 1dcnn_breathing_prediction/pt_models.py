@@ -253,9 +253,9 @@ class RespBertCNNModel(nn.Module):
         self.tanh_va = nn.Tanh()
         self.flatten = nn.Flatten()      
         #self.init_weights()
-        self.unfreeze_last_n_blocks(16)
+        self.unfreeze_last_n_blocks(8)
 
-        self.set_dropout(layers = 8 ,dropout=0.2)
+        self.set_dropout(layers = 4 ,dropout=0.2)
         self.set_dropout(layers = 2 ,dropout=0.3)
 
         

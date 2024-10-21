@@ -257,7 +257,7 @@ class RespBertCNNModel(nn.Module):
 
         self.set_dropout(layers = 4 ,dropout=0.2)
         self.set_dropout(layers = 2 ,dropout=0.3)
-
+        #self.wav_model.gradient_checkpointing_enable()
         
     def set_dropout(self, dropout = 0.2, layers = 8):
         num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers

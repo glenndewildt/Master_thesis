@@ -19,7 +19,7 @@ from transformers import get_cosine_schedule_with_warmup
 
 
 def create_run_directory():
-    base_dir = "pt_runs"
+    base_dir = "pt_runs_SOTA"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = os.path.join(base_dir, timestamp)
     os.makedirs(run_dir, exist_ok=True)

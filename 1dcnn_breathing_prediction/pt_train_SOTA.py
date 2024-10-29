@@ -316,13 +316,13 @@ if __name__ == "__main__":
     
     # Train and data parameters
     epochs = 70
-    batch_size = 1
+    batch_size = 5
     window_size = 30
     step_size = 6
     data_parts = 4 # aka folds
     early_stopping_patience = 10
     
-    config = model_config["VRBModel"]
+    config = model_config["Wav2Vec2ConvLSTMModel"]
     
 
     ## same wav2vec2 base model and pipeline used in the paper

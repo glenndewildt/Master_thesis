@@ -41,29 +41,30 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
                               kernel_size=3,
                               padding=1, dilation = 1)
                
-        self.lstm = nn.LSTM(input_size=self.input_features,
+        self.lstm = nn.LSTM(input_size= 2* self.input_features,
                             hidden_size=config['hidden_units'],
                             num_layers=config['n_lstm'],
                             batch_first=True)
-        self.embedding = nn.Linear(config['hidden_units'], config['hidden_units'])
-        self.output = nn.Linear(config['hidden_units'], config['output_size'])
+        #self.embedding = nn.Linear(config['hidden_units'], config['hidden_units'])
+        self.output = nn.Linear(config['hidden_units'] * 1499, config['output_size'])
         self.flatten = nn.Flatten()
         
     
 
     def forward(self, input_values):
         with torch.no_grad():
-            x=  self.wav_model(**input_values).last_hidden_state
-        x = x.permute(0, 2, 1)         
-        x = self.conv(x) # goes finds patterns in the features over all for breathing features for each timestep      
-        x = x.permute(0, 2, 1)      
-        lstm_out, _ = self.lstm(x) # for each time step there are now 128 features into a lstm       
-        last_time_step = lstm_out[:, -1, :]  # get the lest timestep to get the the timestep with all the incorparated data from the other steps (hopfully) 
-        embed = self.embedding(last_time_step)   # a linear layer with a dimention of of 128   
-        output = self.output(embed)    # last layer goes from 128 from the embedding layer to 400 in the case of 30 second window          
-        x = self.flatten(output)
+            wav2vec_features=  self.wav_model(**input_values).last_hidden_state
+        x = wav2vec_features.permute(0, 2, 1)         
+        conv_features = self.conv(x) # goes finds patterns in the features over all for breathing features for each timestep      
+        conv_features = conv_features.permute(0, 2, 1)
+        concat_features = torch.concat([wav2vec_features,conv_features], dim=-1)      
+        lstm_out, _ = self.lstm(concat_features) # for each time step there are now 128 features into a lstm       
+        #last_time_step = lstm_out[:, -1, :]  # get the lest timestep to get the the timestep with all the incorparated data from the other steps (hopfully) 
+        #embed = self.embedding(lstm_out)   # a linear layer with a dimention of of 128
+        flattend_lstm = self.flatten(lstm_out)
+        output = self.output(flattend_lstm)    # last layer goes from 128 from the embedding layer to 400 in the case of 30 second window          
         
-        return x
+        return output
     
 ##BASED ON VRB HARMA2023 PAPER 
 ## Question1 : Again do i only use the last layer of the GRU, it has a output of 64 so seems a little small, the output has 400 as output shape i would say that for each timestep but could not find it   

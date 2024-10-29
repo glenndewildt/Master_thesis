@@ -9,6 +9,10 @@ profile.html
 bin/micromamba
 breathing_prediction/src/profile.json
 breathing_prediction/src/profile.html
-1dcnn_breathing_prediction/pt_runs/
-1dcnn_breathing_prediction/runs/
-1dcnn_breathing_prediction/slurm-*
+1dcnn_breathing_prediction/pt_runs/*
+1dcnn_breathing_prediction/runs/*
+*runs*/*
+events.out*
+slurm-*
+1dcnn_breathing_prediction/model_predictions_20241023-190407.npz
+1dcnn_breathing_prediction/prepared_test_data_20241023-191657.npz

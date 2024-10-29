@@ -16,6 +16,37 @@ from scipy.stats import pearsonr
 from tqdm import tqdm
 from sklearn.model_selection import KFold
 from pt_dataset import *
+from scipy import interpolate
+from scipy.signal import gauss_spline
+from scipy.ndimage import gaussian_filter
+from scipy.interpolate import CubicSpline
+from scipy.signal import butter, filtfilt, sosfilt
+class KalmanFilter:
+    def __init__(self, initial_state_mean, state_covariance, observation_covariance):
+        self.initial_state_mean = initial_state_mean
+        self.state_covariance = state_covariance
+        self.observation_covariance = observation_covariance
+        self.current_state_estimate = initial_state_mean
+
+    def predict(self):
+        # Prediction step (state transition model)
+        self.current_state_estimate = self.current_state_estimate
+        self.state_covariance = self.state_covariance + self.observation_covariance
+
+    def update(self, observation):
+        # Update step
+        kalman_gain = self.state_covariance / (self.state_covariance + self.observation_covariance)
+        self.current_state_estimate += kalman_gain * (observation - self.current_state_estimate)
+        self.state_covariance *= (1 - kalman_gain)
+
+    def filter(self, observations):
+        estimates = []
+        for observation in observations:
+            self.predict()
+            self.update(observation)
+            estimates.append(self.current_state_estimate.clone())
+        return torch.stack(estimates)
+
 
 class EarlyStopping:
     def __init__(self, patience=7, mode='min', delta=0):
@@ -66,8 +97,7 @@ def unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_s
         for i in range(num_windows):
             start = i * step_size_points
             end = start + window_size_points
-            if end > original_length:
-                end = original_length
+
             segment_length = end - start
 
             # Update original data and overlap count
@@ -85,6 +115,92 @@ def unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_s
     original_data = original_data[:, :original_length]
 
     return original_data
+
+def average_overlap(predictions, window_size, step_size):
+    total_length = (len(predictions) - 1) * step_size + window_size
+    reconstructed = np.zeros(total_length)
+    counts = np.zeros(total_length)
+    
+    for i, pred in enumerate(predictions):
+        start = i * step_size
+        end = start + window_size
+        reconstructed[start:end] += pred
+        counts[start:end] += 1
+    
+    return reconstructed / counts
+
+def linear_interpolation(predictions, window_size, step_size):
+    centers = np.arange(window_size // 2, len(predictions) * step_size, step_size)
+    total_length = (len(predictions) - 1) * step_size + window_size
+    x_new = np.arange(total_length)
+    
+    center_values = predictions[:, window_size // 2]
+    f = interpolate.interp1d(centers, center_values, kind='linear', fill_value='extrapolate')
+    
+    return f(x_new)
+
+def weighted_average(predictions, window_size, step_size):
+    total_length = (len(predictions) - 1) * step_size + window_size
+    reconstructed = np.zeros(total_length)
+    weights = np.zeros(total_length)
+    
+    window_weights = 1 - np.abs(np.linspace(-1, 1, window_size))
+    
+    for i, pred in enumerate(predictions):
+        start = i * step_size
+        end = start + window_size
+        reconstructed[start:end] += pred * window_weights
+        weights[start:end] += window_weights
+    
+    return reconstructed / weights
+def last_valid_prediction(predictions, window_size, step_size):
+    total_length = (len(predictions) - 1) * step_size + window_size
+    reconstructed = np.zeros(total_length)
+    
+    for i, pred in enumerate(reversed(predictions)):
+        start = total_length - (i + 1) * step_size
+        end = start + window_size
+        reconstructed[start:end] = pred
+    
+    return reconstructed
+
+def gaussian_weighted(predictions, window_size, step_size):
+    total_length = (len(predictions) - 1) * step_size + window_size
+    reconstructed = np.zeros(total_length)
+    weights = np.zeros(total_length)
+    
+    gaussian_window = gauss_spline(window_size, std=window_size/6)
+    
+    for i, pred in enumerate(predictions):
+        start = i * step_size
+        end = start + window_size
+        reconstructed[start:end] += pred * gaussian_window
+        weights[start:end] += gaussian_window
+    
+    return reconstructed / weights
+
+def concatenate_prediction_og(predicted_values, timesteps_labels, class_dict, columns_for_real_labels=['filename', 'timeFrame', 'upper_belt']):
+    predicted_values = predicted_values.reshape(timesteps_labels.shape)
+    result_predicted_values = pd.DataFrame(columns=columns_for_real_labels, dtype='float32')
+    result_predicted_values['filename'] = result_predicted_values['filename'].astype('str')
+    
+    for instance_idx in range(predicted_values.shape[0]):
+        predicted_values_tmp = pd.DataFrame(predicted_values[instance_idx], columns=['upper_belt'])
+        timesteps_labels_tmp = pd.DataFrame(timesteps_labels[instance_idx], columns=['timeFrame'])
+        
+        # Round timeFrame to 4 decimal places for comparison
+        timesteps_labels_tmp['timeFrame'] = timesteps_labels_tmp['timeFrame'].round(4)
+        
+        tmp = pd.merge(timesteps_labels_tmp, predicted_values_tmp, left_index=True, right_index=True)
+        tmp = tmp.groupby(by=['timeFrame']).mean().reset_index()
+        tmp['filename'] = class_dict[instance_idx]
+        
+        result_predicted_values = pd.concat([result_predicted_values, tmp.copy(deep=True)], ignore_index=True)
+    
+    result_predicted_values['timeFrame'] = result_predicted_values['timeFrame'].astype('float32')
+    result_predicted_values['upper_belt'] = result_predicted_values['upper_belt'].astype('float32')
+    
+    return result_predicted_values['upper_belt']
 
 def reshaping_data_for_model(data, labels):
     result_data=data.reshape((-1,data.shape[2]))
@@ -340,22 +456,169 @@ def correlation_coefficient_loss(y_true, y_pred):
     return 1 - r
 
 def concatenate_prediction(true_values, predicted_values, timesteps_labels, class_dict):
-    predicted_values=predicted_values.reshape(timesteps_labels.shape)
-    tmp=np.zeros(shape=(true_values.shape[0],3))
-    result_predicted_values=pd.DataFrame(data=tmp, columns=true_values.columns, dtype='float32')
-    result_predicted_values['filename']=result_predicted_values['filename'].astype('str')
-    index_temp=0
-    for instance_idx in range(predicted_values.shape[0]):
-        timesteps=np.unique(timesteps_labels[instance_idx])
+    predicted_values = predicted_values.reshape(timesteps_labels.shape)
+    tmp = np.zeros(shape=(true_values.shape[0], 3))
+    result_predicted_values = pd.DataFrame(data=tmp, columns=true_values.columns, dtype='float32')
+    result_predicted_values['filename'] = result_predicted_values['filename'].astype('str')
+
+    index_temp = 0
+    for instance_idx in range(0,predicted_values.shape[0]-1):
+        # Round the timesteps to 5 decimal places when getting unique values
+        timesteps = np.unique(np.round(timesteps_labels[instance_idx], decimals=5))
+        
         for timestep in timesteps:
             # assignment for filename and timestep
-            result_predicted_values.iloc[index_temp,0]=class_dict[instance_idx]
-            result_predicted_values.iloc[index_temp,1]=timestep
-            # calculate mean of windows
-            result_predicted_values.iloc[index_temp,2]=np.mean(predicted_values[instance_idx,timesteps_labels[instance_idx]==timestep])
-            index_temp+=1
-        #print('concatenation...instance:', instance_idx, '  done')
+            result_predicted_values.iloc[index_temp, 0] = class_dict[instance_idx]
+            # Store the rounded timestep
+            result_predicted_values.iloc[index_temp, 1] = round(timestep, 5)
+            
+            # Calculate mean of windows using rounded comparison
+            mask = np.round(timesteps_labels[instance_idx], decimals=5) == timestep
+            result_predicted_values.iloc[index_temp, 2] = np.mean(predicted_values[instance_idx, mask])
+            index_temp += 1
+            
+    result = result_predicted_values.iloc[:, 2].to_numpy()    
+    result = result.reshape(predicted_values.shape[0],-1)
+    return result
 
-    return result_predicted_values
+def unsplit_data(windowed_data,window_size, step_size, method, original_length, data_points_per_second= 25):
+
+    if method == 'original':
+        return unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_second, original_length)
+    elif method == 'gaussian':
+        return unsplit_data_gaussian(windowed_data, window_size, step_size, data_points_per_second, original_length)
+    elif method == 'cubic':
+        return unsplit_data_cubic(windowed_data, window_size, step_size, data_points_per_second, original_length)
+    elif method == 'kalman':
+        return unsplit_data_kalman(windowed_data, window_size, step_size, data_points_per_second, original_length)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+def unsplit_data_ogsize(windowed_data, window_size, step_size, data_points_per_second, original_length):
+    # Convert to a PyTorch tensor and move to GPU
+
+    if isinstance(windowed_data, np.ndarray):
+        windowed_data = torch.tensor(windowed_data, device='cuda')  # Use 'cuda' for GPU
+
+    device = windowed_data.device  # Ensure to use the same device as windowed_data     
+    window_size_points = window_size * data_points_per_second
+    step_size_points = step_size * data_points_per_second
+    batch_size, num_windows, data_lenght = windowed_data.shape
+    
+    original_data = torch.zeros((batch_size, original_length), device=device)
+    overlap_count = torch.zeros((batch_size, original_length), device=device)
+
+    def process_batch(batch_index):
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = start + window_size_points
+            if end > original_length:
+                end = original_length
+            segment_length = end - start
+
+            # Update original data and overlap count
+            original_data[batch_index, start:end] += windowed_data[batch_index, i, :segment_length]
+            overlap_count[batch_index, start:end] += 1
+
+    # Use Torch's built-in parallelism
+    for b in range(batch_size):
+        process_batch(b)
+
+    # Average the overlapping regions
+    with torch.no_grad():
+        original_data = torch.where(overlap_count != 0, original_data / overlap_count, torch.zeros_like(original_data))
+
+    # Trim the data to match the original length
+    original_data = original_data[:, :original_length]
+
+    return original_data.to("cpu")
 
 
+def unsplit_data_gaussian(windowed_data, window_size, step_size, data_points_per_second, original_length):
+
+    batch_size, num_windows, prediction_size = windowed_data.shape
+    window_size_points = int(window_size * data_points_per_second)
+    step_size_points = int(step_size * data_points_per_second)
+    original_data = np.zeros((batch_size, original_length))
+    overlap_count = np.zeros((batch_size, original_length))
+    
+    for b in range(batch_size):
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = min(start + window_size_points, original_length)
+            segment_length = end - start
+            original_data[b, start:end] += windowed_data[b, i, :segment_length]
+            overlap_count[b, start:end] += 1
+    
+    # Average the overlapping regions
+    original_data = np.divide(original_data, overlap_count, where=overlap_count != 0)
+    
+    # Apply Gaussian filter to the entire signal
+    for b in range(batch_size):
+        original_data[b] = gaussian_filter(original_data[b], sigma=.5)
+    
+    return original_data
+
+def unsplit_data_cubic(windowed_data, window_size, step_size, data_points_per_second, original_length):
+
+    batch_size, num_windows, prediction_size = windowed_data.shape
+    window_size_points = int(window_size * data_points_per_second)
+    step_size_points = int(step_size * data_points_per_second)
+    original_data = np.zeros((batch_size, original_length))
+    overlap_count = np.zeros((batch_size, original_length))
+    
+    for b in range(batch_size):
+        for i in range(num_windows):
+            start = i * step_size_points
+            end = min(start + window_size_points, original_length)
+            segment_length = end - start
+            original_data[b, start:end] += windowed_data[b, i, :segment_length]
+            overlap_count[b, start:end] += 1
+    
+    # Average the overlapping regions
+    original_data = np.divide(original_data, overlap_count, where=overlap_count != 0)
+    
+    # Apply cubic spline interpolation to the entire signal
+    for b in range(batch_size):
+        x = np.arange(original_length)
+        cs = CubicSpline(x, original_data[b])
+        original_data[b] = cs(x)
+    
+    return original_data
+
+def unsplit_data_kalman(windowed_data, window_size, step_size, data_points_per_second, original_length):
+    # Ensure windowed_data is a tensor on the GPU
+    windowed_data = torch.tensor(windowed_data, device='cuda')
+
+    batch_size, num_windows, prediction_size = windowed_data.shape
+    window_size_points = int(window_size * data_points_per_second)
+    step_size_points = int(step_size * data_points_per_second)
+
+    # Initialize tensors on GPU
+    original_data = torch.zeros((batch_size, original_length), device='cuda')
+    overlap_count = torch.zeros((batch_size, original_length), device='cuda')
+
+    # Accumulate data using windowed_data
+    for i in range(num_windows):
+        start = i * step_size_points
+        end = min(start + window_size_points, original_length)
+        segment_length = end - start
+
+        # Use slicing to accumulate results across all batches
+        original_data[:, start:end] += windowed_data[:, i, :segment_length]
+        overlap_count[:, start:end] += 1
+
+    # Average the overlapping regions
+    original_data = torch.where(overlap_count != 0, original_data / overlap_count, torch.zeros_like(original_data))
+
+    # Kalman Filter parameters
+    initial_state_mean = 0.0  # Adjust as needed
+    state_covariance = 0.5  # Decreased to reflect lower uncertainty
+    observation_covariance = 0.1  # Adjusted to reflect observation noise
+
+    # Apply Kalman Filtering to the entire signal
+    kalman_filter = KalmanFilter(initial_state_mean, state_covariance, observation_covariance)
+    for b in range(batch_size):
+        original_data[b] = kalman_filter.filter(original_data[b])
+
+    return original_data.cpu()

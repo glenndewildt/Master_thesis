@@ -23,7 +23,7 @@ from config import Config
 #from torchviz import make_dot
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import CubicSpline
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, sosfilt
 from scipy.stats import norm
 from scipy.optimize import minimize
 from pykalman import KalmanFilter

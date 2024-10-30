@@ -17,6 +17,8 @@ from transformers import (
     AutoProcessor,
     Wav2Vec2FeatureExtractor
 )
+from transformers import AutoProcessor, AutoModelForCTC
+
 import math
 import json
 #from flash_attn import flash_attn_func
@@ -45,8 +47,8 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
                             hidden_size=config['hidden_units'],
                             num_layers=config['n_lstm'],
                             batch_first=True)
-        #self.embedding = nn.Linear(config['hidden_units'], config['hidden_units'])
-        self.output = nn.Linear(config['hidden_units'] * 1499, config['output_size'])
+        self.embedding = nn.Linear(config['hidden_units'] * 1499, config['hidden_units'])
+        self.output = nn.Linear(config['hidden_units'], config['output_size'])
         self.flatten = nn.Flatten()
         
     
@@ -60,9 +62,9 @@ class Wav2Vec2ConvLSTMModel(nn.Module):
         concat_features = torch.concat([wav2vec_features,conv_features], dim=-1)      
         lstm_out, _ = self.lstm(concat_features) # for each time step there are now 128 features into a lstm       
         #last_time_step = lstm_out[:, -1, :]  # get the lest timestep to get the the timestep with all the incorparated data from the other steps (hopfully) 
-        #embed = self.embedding(lstm_out)   # a linear layer with a dimention of of 128
         flattend_lstm = self.flatten(lstm_out)
-        output = self.output(flattend_lstm)    # last layer goes from 128 from the embedding layer to 400 in the case of 30 second window          
+        embed = self.embedding(flattend_lstm)   # a linear layer that goes from a flatted ouput of all the states of the lstm with a feature size of 128 to an embedding layer of 128 
+        output = self.output(embed)    # last layer goes from 128 from the embedding layer to (window_size * sample rate) in this case it is 30 seconds of the window and 25 datapoints per second for the beathing signal
         
         return output
     
@@ -499,3 +501,119 @@ class RespBertLSTMModelTEST(nn.Module):
         print(f"Final output: {final_output.shape}")
 
         return final_output
+    
+class RespBertCNNModel_skip(nn.Module):
+    def __init__(self, config):
+        super(RespBertCNNModel_skip, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+
+        self.d_model = self.wav_model.config.hidden_size       
+        
+        self.time_downsample = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.3),
+
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(), 
+            nn.Dropout(0.3),
+
+        )
+        
+        self.lstm = nn.LSTM(input_size= 2* self.d_model,
+                            hidden_size=config['hidden_units'],
+                            num_layers=2,
+                            dropout=0.3,
+                            batch_first=True)
+        
+        self.time = nn.Linear(1999 * config['hidden_units'], self.output)
+        
+
+        #self.time = None
+        self.tanh_va = nn.Tanh()
+        self.flatten = nn.Flatten()      
+        #self.init_weights()
+        #self.unfreeze_last_n_blocks(8)
+
+        #self.set_dropout(layers = 4 ,dropout=0.3)
+        #self.wav_model.gradient_checkpointing_enable()
+        
+    def set_dropout(self, dropout = 0.2, layers = 8):
+        num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers
+        for i in range(num_layers - layers, num_layers):
+                # Access the dropout layers within the transformer block
+            layer = self.wav_model.encoder.layers[i]  
+            layer.attention.dropout = dropout# Modify attention dropout
+            layer.dropout.p = dropout  # Modify hidden/output dropout    
+            
+    def freeze_conv_only(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        with torch.no_grad():
+            features = self.wav_model(**input_values)[0]
+        x = features.permute(0, 2, 1)       
+        cnn_features = self.time_downsample(x)  
+        cnn_features = cnn_features.permute(0, 2, 1)
+        concat_values = torch.concat([features, cnn_features],dim = -1)  
+        lstm, _ = self.lstm(concat_values)
+        x = self.flatten(lstm)
+        x = self.time(x)
+        x = self.tanh_va(x)
+        return x  
+    
+class WavLMCNNLSTM(nn.Module):
+    def __init__(self, config):
+        super(WavLMCNNLSTM, self).__init__()
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+
+        self.input_features = self.wav_model.config.hidden_size       
+        self.conv = nn.Conv1d(in_channels=self.input_features,
+                                out_channels=self.input_features,
+                                kernel_size=3,
+                                padding=1, dilation = 1)
+                
+        self.lstm = nn.LSTM(input_size= 2* self.input_features,
+                            hidden_size=config['hidden_units'],
+                            num_layers=config['n_lstm'],
+                            batch_first=True)
+        self.embedding = nn.Linear(config['hidden_units'] * 1499, config['output_size'])
+        self.output = nn.Linear(config['hidden_units'], config['output_size'])
+        self.flatten = nn.Flatten()
+        self.unfreeze_last_n_blocks(18)
+
+        
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        wav2vec_features=  self.wav_model(**input_values).last_hidden_state
+        x = wav2vec_features.permute(0, 2, 1)         
+        conv_features = self.conv(x) # goes finds patterns in the features over all for breathing features for each timestep      
+        conv_features = conv_features.permute(0, 2, 1)
+        concat_features = torch.concat([wav2vec_features,conv_features], dim=-1)      
+        lstm_out, _ = self.lstm(concat_features) # for each time step there are now 128 features into a lstm       
+        #last_time_step = lstm_out[:, -1, :]  # get the lest timestep to get the the timestep with all the incorparated data from the other steps (hopfully) 
+        flattend_lstm = self.flatten(lstm_out)
+        embed = self.embedding(flattend_lstm)   # a linear layer that goes from a flatted ouput of all the states of the lstm with a feature size of 128 to an embedding layer of 128 
+        #output = self.output(embed)    # last layer goes from 128 from the embedding layer to (window_size * sample rate) in this case it is 30 seconds of the window and 25 datapoints per second for the beathing signal
+        
+        return embed

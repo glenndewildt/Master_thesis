@@ -119,12 +119,12 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
         model = config["model"](config).to(device)
         
         #### training optimiser parameters fror apple
-        # learning_rate = 0.005 
-        # optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        learning_rate = 0.005 
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         #### training optimiser parameters fror harma_2023 VRB model 
         # learning_rate = 0.005 # dont know
-        optimizer = optim.SGD(model.parameters())
+        #optimizer = optim.SGD(model.parameters())
         
         
         best_val_loss = float('inf')
@@ -290,8 +290,8 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
 
 if __name__ == "__main__":
     ## Path to data
-    path = "/home/glenn/Downloads/"
-    #path = "../DATA/"
+    #path = "/home/glenn/Downloads/"
+    path = "../DATA/"
 
 
     # Model parameters
@@ -315,12 +315,12 @@ if __name__ == "__main__":
 
     
     # Train and data parameters
-    epochs = 70
-    batch_size = 5
+    epochs = 150
+    batch_size = 64
     window_size = 30
     step_size = 6
     data_parts = 4 # aka folds
-    early_stopping_patience = 10
+    early_stopping_patience = 15
     
     config = model_config["Wav2Vec2ConvLSTMModel"]
     

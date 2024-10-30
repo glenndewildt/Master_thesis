@@ -11,7 +11,7 @@ breathing_prediction/src/profile.json
 breathing_prediction/src/profile.html
 1dcnn_breathing_prediction/pt_runs/*
 1dcnn_breathing_prediction/runs/*
-*runs*/*
+*runs*/
 events.out*
 slurm-*
 1dcnn_breathing_prediction/model_predictions_20241023-190407.npz

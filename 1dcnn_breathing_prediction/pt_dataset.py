@@ -150,8 +150,8 @@ class GPUBreathingDataset(Dataset):
             (0.1, self.apply_noise),
             (0.1, self.apply_gain),
             (0.1, self.apply_pitch_shift),
-            (0.1, self.apply_lowpass),
-            (0.1, self.apply_highpass),
+            #(0.1, self.apply_lowpass),
+            #(0.1, self.apply_highpass),
             (0.1, self.apply_freq_mask),
             (0.1, self.apply_time_mask)
         ]

@@ -79,21 +79,26 @@ class VRBModel(nn.Module):
         for param in self.wav_model.parameters():
             param.requires_grad = False
         self.input_features = self.wav_model.config.hidden_size       
-        self.gru = nn.GRU(input_size=self.input_features,
+        self.lstm = nn.LSTM(input_size=self.input_features,
                           hidden_size=config['hidden_units'],
                           num_layers=config['n_gru'],
                           batch_first=True)
-        self.embedding = nn.Linear(config['hidden_units'], config['output_size'])
-        self.flatten = nn.Flatten()       
+        self.fc = nn.Linear(config['hidden_units'] * 1499, config['output_size'])
+        self.average_pooling = nn.AdaptiveAvgPool1d(config['output_size'])
+        self.flatten = nn.Flatten()
+      
     
     def forward(self, input_values):
         with torch.no_grad():
             wav_output = self.wav_model(**input_values).last_hidden_state
-        gru_out, _ = self.gru(wav_output)      
-        last_time_step = gru_out[:, -1, :]     
-        embed = self.embedding(last_time_step)
-        x = self.flatten(embed)
-        return x
+        lstm_out, _ = self.lstm(wav_output)  
+            
+        #last_time_step = gru_out[:, -1, :]
+        flattend_lstm = self.flatten(lstm_out)
+        average_output = self.average_pooling(flattend_lstm)
+     
+        fc = self.fc(average_output)
+        return fc
     
 
 ## MY PROPOSED MODEL DESIGNS

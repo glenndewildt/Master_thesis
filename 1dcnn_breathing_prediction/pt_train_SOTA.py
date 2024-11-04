@@ -119,15 +119,15 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
         model = config["model"](config).to(device)
         
         #### training optimiser parameters fror apple
-        learning_rate = 0.005 
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        #learning_rate = 0.005 
+        #optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         #### training optimiser parameters fror harma_2023 VRB model 
-        # learning_rate = 0.005 # dont know
-        #optimizer = optim.SGD(model.parameters())
-        
+        learning_rate = 0.01 # dont know
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate)       
         
         best_val_loss = float('inf')
+        best_val_loss_flat = float('inf')
         early_stopping_counter = 0
         # To accumulate metrics across folds for each epoch
         train_acc = []
@@ -138,6 +138,7 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
             model.train()
             train_loss = 0.0
             progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
+            
             for batch_d, batch_lbs in progress_bar:
                 optimizer.zero_grad()
                 input_values = batch_d.to(device)
@@ -189,6 +190,7 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
             if val_loss < best_val_loss:
                 print(f"Validation loss improved from {best_val_loss:.4f} to {val_loss:.4f}. Saving best model...")
                 best_val_loss = val_loss
+                best_val_loss_flat = val_prc_coef
                 early_stopping_counter = 0
 
                 # Save the best model
@@ -225,15 +227,15 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
         test_prc_coef = _calculate_flattened_accuracy(test_pred_flat, test_ground_truth)
 
         print(f"Fold {fold + 1}:")
-        print(f"  Validation Pearson Coefficient  acc: {1- val_loss}")
-        print(f"  Validation Pearson Coefficient flat acc: {val_prc_coef}")
+        print(f"  Validation Pearson Coefficient  acc: {1- best_val_loss}")
+        print(f"  Validation Pearson Coefficient flat acc: {best_val_loss_flat}")
         print(f"  Test acc: {1- test_loss}")
         print(f"  Test Pearson Coefficient acc(flattened): {test_prc_coef}")
 
         fold_metrics.append({
             'Fold': fold + 1,
-            'val_prc_acc': 1- val_loss,
-            'val_prc_acc_flat': val_prc_coef,
+            'val_prc_acc': 1- best_val_loss,
+            'val_prc_acc_flat': best_val_loss_flat,
             'test_acc': 1- test_loss,
             'test_prc_flat': test_prc_coef
         })
@@ -290,8 +292,8 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
 
 if __name__ == "__main__":
     ## Path to data
-    #path = "/home/glenn/Downloads/"
-    path = "../DATA/"
+    path = "/home/glenn/Downloads/"
+    #path = "../DATA/"
 
 
     # Model parameters
@@ -315,14 +317,14 @@ if __name__ == "__main__":
 
     
     # Train and data parameters
-    epochs = 150
-    batch_size = 64
+    epochs = 128
+    batch_size = 128
     window_size = 30
     step_size = 6
     data_parts = 4 # aka folds
-    early_stopping_patience = 15
+    early_stopping_patience = 3
     
-    config = model_config["Wav2Vec2ConvLSTMModel"]
+    config = model_config["VRBModel"]
     
 
     ## same wav2vec2 base model and pipeline used in the paper

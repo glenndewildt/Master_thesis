@@ -64,7 +64,7 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
 
     # Prepare data
     prepared_data, prepared_labels, prepared_labels_timesteps = prepare_data(all_data, all_labels, all_dict, frame_rate, length_sequence * 16000, step_sequence * 16000)
-    prepared_test_data, prepared_test_labels, prepared_test_labels_timesteps = prepare_data(test_data, test_labels, test_dict, frame_rate, length_sequence * 16000, step_sequence * 16000)
+    prepared_test_data, prepared_test_labels, prepared_test_labels_timesteps = prepare_data(test_data, test_labels, test_dict, frame_rate, length_sequence * 16000, 1 * 16000)
 
     # Create CSV file for storing fold indices
     fold_indices_df = pd.DataFrame(columns=['Fold', 'Train_Indices', 'Val_Indices'])
@@ -106,8 +106,8 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
         print(train_d.shape)
 
         # Create datasets
-        #train_dataset = BreathingDataset(train_d, train_lbs, processor, window_size, step_sequence, augment=True)
-        train_dataset = GPUBreathingDataset(train_d, train_lbs, processor, augment=True)
+        train_dataset = BreathingDataset(train_d, train_lbs, processor, window_size, step_sequence)
+        #train_dataset = GPUBreathingDataset(train_d, train_lbs, processor, augment=True)
         val_dataset = BreathingDataset(val_d, val_lbs, processor, window_size, step_sequence)
         test_dataset = BreathingDataset(test_d, test_lbs, processor, window_size, step_sequence)
 
@@ -153,8 +153,8 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
             for input_values, batch_lbs in progress_bar:
                 optimizer.zero_grad()
                 
-                #input_values = batch_d.to(device)
-                #batch_lbs = batch_lbs.to(device)
+                input_values = input_values.to(device)
+                batch_lbs = batch_lbs.to(device)
                 
                 outputs = model(input_values)
                 loss = correlation_coefficient_loss(outputs, batch_lbs)
@@ -350,20 +350,26 @@ if __name__ == "__main__":
             "model_name": "microsoft/wavlm-large",
             "hidden_units": 256,
             "output_size": None  
-        }
+        },"VBR_WALM":{
+            "model" : VRBModel,
+            "model_name": "microsoft/wavlm-large",
+            "hidden_units": 128,
+            "n_gru": 3,
+            "output_size": None  # Will be set dynamically
+        },
     }
     
 
     
     # Train and data parameters
     epochs = 70
-    batch_size = 12
+    batch_size = 20
     window_size = 30
     step_size = 6
     data_parts = 4 # aka folds
     early_stopping_patience = 10
     
-    config = model_config["RespBertCNNModel"]
+    config = model_config["VBR_WALM"]
     #model
     
     model = None
@@ -373,8 +379,8 @@ if __name__ == "__main__":
 
 
     train(
-        path_to_data=path+"ComParE2020_Breathing/wav/",
-        path_to_labels=path+"ComParE2020_Breathing/lab/",
+        path_to_data=path+"ComParE2020_Breathing/wav/normalized/",
+        path_to_labels=path+"ComParE2020_Breathing/lab/normalized/",
         window_size=window_size,
         batch_size=batch_size,
         config = config,

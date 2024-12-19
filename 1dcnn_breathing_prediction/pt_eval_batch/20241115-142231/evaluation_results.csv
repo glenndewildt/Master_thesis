@@ -1,0 +1,4 @@
+,fold,model_path,test_loss,accuracy_original,accuracy_gaussian
+0,1.0,./pt_runs/wav_vrb/best_model_fold1,0.195989939349669,0.8284909539879152,0.828508366418958
+average,1.0,,0.195989939349669,0.8284909539879152,0.828508366418958
+std_dev,,,,,

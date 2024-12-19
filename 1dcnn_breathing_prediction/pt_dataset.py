@@ -6,6 +6,7 @@ from typing import List, Tuple
 import random
 from transformers import Wav2Vec2Processor
 import torchaudio.functional as F
+from torch.cuda.amp import autocast, GradScaler
 
 class BreathingDataset(Dataset):
     def __init__(self, data: np.ndarray, labels: np.ndarray, 
@@ -58,11 +59,11 @@ class BreathingDataset(Dataset):
         return F.add_noise(signal, noise, snr)
 
     def apply_gain(self, signal):
-        gain_db = torch.tensor(random.randint(-1, 1))
+        gain_db = torch.tensor(random.randint(-2, 2))
         return F.gain(signal, gain_db)
 
     def apply_pitch_shift(self, signal):
-        n_steps = random.randint(-1, 1)
+        n_steps = random.randint(-2, 2)
         return F.pitch_shift(signal, self.sample_rate, n_steps)
 
     def apply_lowpass(self, signal):
@@ -147,9 +148,9 @@ class GPUBreathingDataset(Dataset):
             augmented_signal = augmented_signal.unsqueeze(0)
 
         aug_functions = [
-            (0.1, self.apply_noise),
-            (0.1, self.apply_gain),
-            (0.1, self.apply_pitch_shift),
+            (0.2, self.apply_noise),
+            (0.2, self.apply_gain),
+            (0.2, self.apply_pitch_shift),
             #(0.1, self.apply_lowpass),
             #(0.1, self.apply_highpass),
             (0.1, self.apply_freq_mask),
@@ -168,11 +169,11 @@ class GPUBreathingDataset(Dataset):
         return F.add_noise(signal, noise, snr)
 
     def apply_gain(self, signal):
-        gain_db = torch.tensor(random.randint(-1, 1), device='cuda')
+        gain_db = torch.tensor(random.randint(-2, 2), device='cuda')
         return F.gain(signal, gain_db)
 
     def apply_pitch_shift(self, signal):
-        n_steps = random.randint(-1, 1)
+        n_steps = random.randint(-2, 2)
         return F.pitch_shift(signal, self.sample_rate, n_steps)
 
     def apply_lowpass(self, signal):
@@ -202,13 +203,12 @@ class GPUBreathingDataset(Dataset):
         labels = torch.stack(labels)
         
         # Process with Wav2Vec2 processor
-        with torch.cuda.amp.autocast():
-            inputs = self.processor(
-                audios.cpu().numpy(),  # Processor expects numpy array
-                sampling_rate=16000, 
-                return_tensors="pt", 
-                padding=True
-            )
+        inputs = self.processor(
+            audios.cpu().numpy(),  # Processor expects numpy array
+            sampling_rate=16000, 
+            return_tensors="pt", 
+            padding=True
+        )
         
         # Move inputs to GPU
         inputs = {k: v.cuda() for k, v in inputs.items()}

@@ -1,0 +1,4 @@
+,fold,model_path,test_loss,accuracy_original,accuracy_gaussian
+0,1.0,./pt_runs/HuCnn/best_model_fold1,0.17898349720856238,0.8167748084383759,0.8171013183779116
+average,1.0,,0.17898349720856238,0.8167748084383759,0.8171013183779116
+std_dev,,,,,

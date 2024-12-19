@@ -111,20 +111,19 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
         test_dataset = BreathingDataset(test_d, test_lbs, processor, window_size, step_sequence)
 
         # Create DataLoaders
-        train_loader = DataLoader(train_dataset, batch_size=batch_size,num_workers=2, shuffle=True, collate_fn=train_dataset.collate_fn)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=1, collate_fn=val_dataset.collate_fn)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=1, collate_fn=test_dataset.collate_fn)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=train_dataset.collate_fn)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, collate_fn=val_dataset.collate_fn)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=test_dataset.collate_fn)
         print(config["output_size"])
         # Create and initialize model
         model = config["model"](config).to(device)
         
         #### training optimiser parameters fror apple
-        #learning_rate = 0.005 
-        #optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        learning_rate = 0.005 
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         #### training optimiser parameters fror harma_2023 VRB model 
-        learning_rate = 0.01 # dont know
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate)       
+ 
         
         best_val_loss = float('inf')
         best_val_loss_flat = float('inf')
@@ -292,15 +291,15 @@ def train(path_to_data, path_to_labels, window_size=16, step_size=6, data_parts=
 
 if __name__ == "__main__":
     ## Path to data
-    path = "/home/glenn/Downloads/"
-    #path = "../DATA/"
+    #path = "/home/glenn/Downloads/"
+    path = "../DATA/"
 
 
     # Model parameters
     model_config = {
         "VRBModel": {
             "model" : VRBModel,
-            "model_name": "facebook/hubert-large-ls960-ft",
+            "model_name": "facebook/hubert-large-ll60k",
             "hidden_units": 64,
             "n_gru": 3,
             "output_size": None  # Will be set dynamically
@@ -311,25 +310,47 @@ if __name__ == "__main__":
             "hidden_units": 128,
             "n_lstm": 2,
             "output_size": None  # Will be set dynamically
+        },
+            "RespBertCNNModelV2": {
+            'model' : RespBertCNNModelV2,
+            "model_name": "microsoft/wavlm-large",
+            "hidden_units": 128,
+            "output_size": None  
+        },
+            "RespBertLSTMModelV2": {
+            'model': RespBertLSTMModelV2,
+            "model_name": "microsoft/wavlm-large",
+            "hidden_units": 128,
+            "n_lstm": 3,
+            "output_size": None  
+        }
+            ,
+            "RespBertLSTMCNNTransformerModel": {
+            'model': RespBertLSTMCNNTransformerModel,
+            "model_name": "microsoft/wavlm-large",
+            "hidden_units": 64,
+            "n_lstm": 2,
+            "output_size": None  
         }
     }
     
 
     
     # Train and data parameters
-    epochs = 128
-    batch_size = 128
+    epochs = 100
+    batch_size = 64
     window_size = 30
     step_size = 6
     data_parts = 4 # aka folds
-    early_stopping_patience = 3
+    early_stopping_patience = 13
     
-    config = model_config["VRBModel"]
+    config = model_config["Wav2Vec2ConvLSTMModel"]
     
 
     ## same wav2vec2 base model and pipeline used in the paper
     processor = AutoProcessor.from_pretrained(config["model_name"])
-    
+    #processor = Wav2Vec2FeatureExtractor.from_pretrained(config["model_name"])
+
     train(
         path_to_data=path+"ComParE2020_Breathing/wav/",
         path_to_labels=path+"ComParE2020_Breathing/lab/",

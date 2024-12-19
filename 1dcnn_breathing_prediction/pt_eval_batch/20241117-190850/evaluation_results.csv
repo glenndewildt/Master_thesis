@@ -1,0 +1,4 @@
+,fold,model_path,test_loss,accuracy_original,accuracy_gaussian
+0,1.0,./pt_runs/CNN1/best_model_fold1,0.16803381272724696,0.820697441821508,0.8208348605810278
+average,1.0,,0.16803381272724696,0.820697441821508,0.8208348605810278
+std_dev,,,,,

@@ -25,6 +25,153 @@ import json
 from pt_utils import *
 from pt_dataset import *
 
+import torch
+import torch.nn as nn
+from transformers import AutoModel, AdamW, get_cosine_schedule_with_warmup
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.nn.init import xavier_uniform_, kaiming_uniform_
+from tqdm import tqdm
+class WavlmCNNModel(nn.Module):
+    def __init__(self, config):
+        super(WavlmCNNModel, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+        self.d_model = self.wav_model.config.hidden_size       
+        self.features = config['hidden_units']
+        
+        self.cnn_down = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),  
+            nn.GELU(), 
+            nn.Dropout(0.2),         
+        )
+        
+        self.feature_down = nn.Sequential(
+            nn.Linear(self.features, 1),
+            nn.Flatten()
+        )
+        self.time_down = nn.Sequential(
+            nn.Linear(1499, self.output),
+            nn.Tanh()  # Ensures output is between -1 and 1
+        )
+        self.flatten = nn.Flatten()      
+        
+        self._initialize_weights()
+        self.freeze_all_layers()
+                
+    def _initialize_weights(self):
+        # Initialize weights for CNN layers
+        for m in self.cnn_down:
+            if isinstance(m, nn.Conv1d):
+                kaiming_uniform_(m.weight, nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm1d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+        
+        # Initialize weights for Linear layers
+        for m in self.feature_down:
+            if isinstance(m, nn.Linear):
+                xavier_uniform_(m.weight)
+                m.bias.data.zero_()
+        for m in self.time_down:
+            if isinstance(m, nn.Linear):
+                xavier_uniform_(m.weight)
+                m.bias.data.zero_()
+
+
+
+    def freeze_all_layers(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x = self.wav_model(**input_values)[0]
+        x = x.permute(0, 2, 1)       
+        x = self.cnn_down(x)  
+        x = x.permute(0, 2, 1)
+        x = self.feature_down(x)
+        x = self.time_down(x)
+        return x
+class RespBertAttention(nn.Module):
+    def __init__(self, config):
+        super(RespBertAttention, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+        self.d_model = self.wav_model.config.hidden_size       
+        self.features = config['hidden_units']
+        
+        # Transformer Encoder with Layer Normalization and Residual Connections
+        self.transformer_layer = TransformerEncoderLayer(
+            d_model=self.d_model, 
+            nhead=16, 
+            dropout=0.2, 
+        )
+        self.transformer_encoder = TransformerEncoder(self.transformer_layer, num_layers=config['n_attion'])
+
+        self.cnn_down = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),  
+            nn.GELU(), 
+            nn.Dropout(0.2),         
+        )
+        
+        self.feature_down = nn.Sequential(
+            nn.Linear(self.features, 1),
+            nn.Flatten()
+        )
+        self.time_down = nn.Sequential(
+            nn.Linear(1499, self.output),
+            nn.Tanh()  # Ensures output is between -1 and 1
+        )
+        self.flatten = nn.Flatten()      
+        
+        self.freeze_all_layers()
+                
+
+    def freeze_all_layers(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x = self.wav_model(**input_values)[0]
+        x = self.transformer_encoder(x)        
+
+        x = x.permute(0, 2, 1)       
+        x = self.cnn_down(x)  
+        x = x.permute(0, 2, 1)
+  
+        x = self.feature_down(x)
+
+        x = self.time_down(x)
+
+        return x
+
 ##BASED IN APPLE PAPER
 ## question1 : I use only the last layer from the lstm, is this a good assumtion?
 ## they say they make use of a ebedding layer with 128 so did add that before the final layer but also not sure they ment that this way 
@@ -84,7 +231,6 @@ class VRBModel(nn.Module):
                           num_layers=config['n_gru'],
                           batch_first=True)
         self.fc = nn.Linear(config['hidden_units'] * 1499, config['output_size'])
-        self.average_pooling = nn.AdaptiveAvgPool1d(config['output_size'])
         self.flatten = nn.Flatten()
       
     
@@ -95,21 +241,48 @@ class VRBModel(nn.Module):
             
         #last_time_step = gru_out[:, -1, :]
         flattend_lstm = self.flatten(lstm_out)
-        average_output = self.average_pooling(flattend_lstm)
      
-        fc = self.fc(average_output)
+        fc = self.fc(flattend_lstm)
+        
+        return fc
+    
+class WavlmVRBModel(nn.Module):
+    def __init__(self,config):
+        super(WavlmVRBModel, self).__init__()
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+        # Freeze the Wav2Vec2 model's parameters
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+        self.input_features = self.wav_model.config.hidden_size       
+        self.lstm = nn.LSTM(input_size=self.input_features,
+                          hidden_size=config['hidden_units'],
+                          num_layers=config['n_gru'],
+                          batch_first=True)
+        self.fc = nn.Linear(config['hidden_units'] * 1999, config['output_size'])
+        self.flatten = nn.Flatten()
+      
+    
+    def forward(self, input_values):
+        with torch.no_grad():
+            wav_output = self.wav_model(**input_values).last_hidden_state
+        #print(wav_output.shape)
+        lstm_out, _ = self.lstm(wav_output)  
+            
+        #last_time_step = gru_out[:, -1, :]
+        flattend_lstm = self.flatten(lstm_out)
+     
+        fc = self.fc(flattend_lstm)
+        
         return fc
     
 
 ## MY PROPOSED MODEL DESIGNS
-class RespBertLSTMModel(nn.Module):
+class RespBertLSTM(nn.Module):
     def __init__(self,config):
-        super(RespBertLSTMModel, self).__init__()
+        super(RespBertLSTM, self).__init__()
         self.output = config['output_size']
         
         self.wav_model = AutoModel.from_pretrained(config["model_name"])
-
-        #self.wav_model.encoder.layers = self.wav_model.encoder.layers[:]
 
         self.input_features = self.wav_model.config.hidden_size       
         
@@ -127,8 +300,6 @@ class RespBertLSTMModel(nn.Module):
             nn.BatchNorm1d(self.features ),  
             nn.GELU(),
             nn.Dropout(0.2),         
-
-            #nn.AdaptiveAvgPool1d(self.output),
   
         )
 
@@ -198,7 +369,7 @@ class RespBertAttionModel(nn.Module):
             #nn.AdaptiveAvgPool1d(self.output),
   
         )
-        self.time = nn.Linear(2249, self.output)
+        self.time = nn.Linear(1499, self.output)
         self.feature_downsample = nn.Linear(self.features, 1)
         
 
@@ -622,3 +793,518 @@ class WavLMCNNLSTM(nn.Module):
         #output = self.output(embed)    # last layer goes from 128 from the embedding layer to (window_size * sample rate) in this case it is 30 seconds of the window and 25 datapoints per second for the beathing signal
         
         return embed
+    
+class RespBertCNNModelV2(nn.Module):
+    def __init__(self, config):
+        super(RespBertCNNModelV2, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+
+        #self.wav_model.encoder.layers = self.wav_model.encoder.layers[:]
+
+        self.d_model = self.wav_model.config.hidden_size       
+        
+        self.features = config['hidden_units']
+
+        self.time_downsample = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),  
+            nn.GELU(), 
+            nn.Dropout(0.2),       
+            #nn.AdaptiveAvgPool1d(self.output),
+  
+        )
+        self.time = nn.Linear(self.features*1499, self.output)
+        self.feature_downsample = nn.Linear(self.features, 1)
+        
+
+        #self.time = None
+        self.tanh_va = nn.Tanh()
+        self.flatten = nn.Flatten()      
+        #self.init_weights()
+        self.unfreeze_last_n_blocks(8)
+
+        self.set_dropout(layers = 4 ,dropout=0.2)
+        self.set_dropout(layers = 2 ,dropout=0.3)
+        #self.wav_model.gradient_checkpointing_enable()
+        
+    def set_dropout(self, dropout = 0.2, layers = 8):
+        num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers
+        for i in range(num_layers - layers, num_layers):
+                # Access the dropout layers within the transformer block
+            layer = self.wav_model.encoder.layers[i]  
+            layer.attention.dropout = dropout# Modify attention dropout
+            layer.dropout.p = dropout  # Modify hidden/output dropout    
+            
+    def freeze_conv_only(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x= self.wav_model(**input_values)[0]
+      
+
+        #x = self.transformer_layer(x)        
+        x = x.permute(0, 2, 1)       
+        x = self.time_downsample(x)  
+        x = x.permute(0, 2, 1)     
+        x = self.flatten(x)
+        x = self.time(x)
+        return x
+
+# MY PROPOSED MODEL DESIGNS
+class RespBertLSTMModelV2(nn.Module):
+    def __init__(self,config):
+        super(RespBertLSTMModel, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+
+        self.input_features = self.wav_model.config.hidden_size       
+        
+        self.features = config['hidden_units']
+        
+        self.lstm = nn.LSTM(input_size=self.input_features, hidden_size=self.features, num_layers=config['n_lstm'], batch_first=True, dropout=0.2, bidirectional=False)
+        
+        self.time = nn.Linear(1499*self.input_features, self.output)
+        self.flatten = nn.Flatten()
+        
+        self.unfreeze_last_n_blocks(16)
+                
+    def freeze_conv_only(self):
+        for param in self.wav_model.feature_extractor.conv_layers.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) -> None:
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x= self.wav_model(**input_values)[0]
+        x, _ = self.lstm(x)       
+        x = self.flatten(x)
+        x = self.time(x)
+
+        return x
+    
+import torch
+import torch.nn as nn
+from transformers import AutoModel
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
+
+class RespBertLSTMCNNTransformerModel(nn.Module):
+    def __init__(self, config):
+        super(RespBertLSTMCNNTransformerModel, self).__init__()
+        self.output = config['output_size']
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+        self.input_features = self.wav_model.config.hidden_size
+        self.features = config['hidden_units']
+
+        # LSTM layers
+        self.lstm = nn.LSTM(input_size=self.input_features, hidden_size=self.features, num_layers=config['n_lstm'], batch_first=True, dropout=0.2, bidirectional=False)
+
+        # CNN layers
+        self.cnn = nn.Sequential(
+            nn.Conv1d(self.input_features, self.input_features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.input_features),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Conv1d(self.input_features, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),
+            nn.GELU(),
+            nn.Dropout(0.2),
+        )
+
+        # Linear projection to match feature sizes
+        self.projection = nn.Linear(self.input_features, self.features)
+
+        # Transformer layers
+        encoder_layer = TransformerEncoderLayer(d_model=self.features * 3, nhead=8, dropout=0.2)
+        self.transformer = TransformerEncoder(encoder_layer, num_layers=1)
+
+        self.fc = nn.Linear((1499*self.features * 3) , self.output)
+        self.flatten = nn.Flatten()
+
+        self.unfreeze_last_n_blocks(8)
+
+    def freeze_conv_only(self):
+        for param in self.wav_model.feature_extractor.conv_layers.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) -> None:
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        wav = self.wav_model(**input_values)[0]
+        cnn_output = self.cnn(wav.permute(0, 2, 1))
+        lstm_output, _ = self.lstm(wav)
+
+        # Project Wav2Vec2 output to match CNN and LSTM feature size
+        wav_projected = self.projection(wav)
+
+        # Combine CNN, LSTM, and projected Wav2Vec2 outputs
+        combined_output = torch.cat((cnn_output.permute(0, 2, 1), lstm_output, wav_projected), dim=2)
+        combined_output = combined_output.permute(1, 0, 2)  # (batch, sequence, features)
+
+        # Pass combined output through Transformer layers
+        transformer_output = self.transformer(combined_output)
+        transformer_output = transformer_output.permute(1, 0, 2)  # (batch, sequence, features)
+
+        
+        # Final fully connected layer
+        output = self.fc(self.flatten(transformer_output))
+
+        return output
+class WALMLSTM(nn.Module):
+    def __init__(self, config):
+        super(WALMLSTM, self).__init__()
+        self.output = config['output_size']
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+
+        self.input_features = self.wav_model.config.hidden_size
+        self.features = config['hidden_units']
+
+        # LSTM layers
+        self.lstm = nn.LSTM(input_size=self.input_features, hidden_size=self.features, num_layers=config['n_lstm'], batch_first=True, dropout=0.2, bidirectional=True)
+
+        self.fc = nn.Linear((1499*self.features * 2) , self.output)
+        self.flatten = nn.Flatten()
+
+        self.unfreeze_last_n_blocks(16)
+
+    def freeze_conv_only(self):
+        for param in self.wav_model.feature_extractor.conv_layers.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) -> None:
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        wav = self.wav_model(**input_values)[0]
+        lstm_output, _ = self.lstm(wav)
+
+        
+        # Final fully connected layer
+        output = self.fc(self.flatten(lstm_output))
+
+        return output
+    
+class RespBertCNN_12_Model(nn.Module):
+    def __init__(self, config):
+        super(RespBertCNN_12_Model, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+        
+
+        #self.wav_model.encoder.layers = self.wav_model.encoder.layers[:12]
+
+        self.d_model = self.wav_model.config.hidden_size       
+        
+        self.features = config['hidden_units']
+
+        self.time_downsample = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),  
+            nn.GELU(), 
+            nn.Dropout(0.2),       
+            #nn.AdaptiveAvgPool1d(self.output),
+  
+        )
+        self.time = nn.Linear(1999, self.output)
+        self.feature_downsample = nn.Linear(self.features, 1)
+        
+
+        #self.time = None
+        self.tanh_va = nn.Tanh()
+        self.flatten = nn.Flatten()      
+        #self.init_weights()
+        self.unfreeze_last_n_blocks(12)
+
+        self.set_dropout(layers = 8 ,dropout=0.2)
+        #self.wav_model.gradient_checkpointing_enable()
+        
+    def set_dropout(self, dropout = 0.2, layers = 8):
+        num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers
+        for i in range(num_layers - layers, num_layers):
+                # Access the dropout layers within the transformer block
+            layer = self.wav_model.encoder.layers[i]  
+            layer.attention.dropout = dropout# Modify attention dropout
+            layer.dropout.p = dropout  # Modify hidden/output dropout    
+            
+    def freeze_conv_only(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x= self.wav_model(**input_values)[0]
+      
+
+        #x = self.transformer_layer(x)        
+        x = x.permute(0, 2, 1)       
+        x = self.time_downsample(x)  
+        x = x.permute(0, 2, 1)     
+        x = self.feature_downsample(x)
+        x = self.flatten(x)
+        if self.time == None:
+            self.time = nn.Linear(x.shape[-1], self.output).to("cuda")
+        x = self.time(x)
+        x = self.tanh_va(x)
+        return x
+    
+class HuBertCNN_con_Model(nn.Module):
+    def __init__(self, config):
+        super(HuBertCNN_con_Model, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"],attn_implementation="flash_attention_2")
+        
+
+        #self.wav_model.encoder.layers = self.wav_model.encoder.layers[:12]
+
+        self.d_model = self.wav_model.config.hidden_size       
+        
+        self.features = config['hidden_units']
+
+        self.time_downsample = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(), 
+            nn.Dropout(0.2),       
+            #nn.AdaptiveAvgPool1d(self.output),
+  
+        )
+        self.time = nn.Linear(1499, self.output)
+        self.feature_downsample = nn.Linear(self.d_model*2, 1)
+       
+
+        #self.time = None
+        self.tanh_va = nn.Tanh()
+        self.flatten = nn.Flatten()      
+        #self.init_weights()
+        self.unfreeze_last_n_blocks(16)
+
+        self.set_dropout(layers = 8 ,dropout=0.2)
+        #self.wav_model.gradient_checkpointing_enable()
+        
+    def set_dropout(self, dropout = 0.2, layers = 8):
+        num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers
+        for i in range(num_layers - layers, num_layers):
+                # Access the dropout layers within the transformer block
+            layer = self.wav_model.encoder.layers[i]  
+            layer.attention.dropout = dropout# Modify attention dropout
+            layer.dropout.p = dropout  # Modify hidden/output dropout    
+            
+    def freeze_conv_only(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        outputs = self.wav_model(**input_values, output_hidden_states=True)
+        cnn = outputs.hidden_states[0] # Shape: (batch_size, sequence_length, hidden_size)
+        trans = outputs.hidden_states[-1] # Shape: (batch_size, sequence_length, hidden_size)
+
+        #x = self.transformer_layer(x)        
+        trans = trans.permute(0, 2, 1)       
+        trans = self.time_downsample(trans)  
+        trans = trans.permute(0, 2, 1)
+        
+
+        concat_features = torch.concat([trans,cnn], dim=-1)      
+        x = self.feature_downsample(concat_features)
+
+        x = self.flatten(x)
+        if self.time == None:
+            self.time = nn.Linear(x.shape[-1], self.output).to("cuda")
+        x = self.time(x)
+        #x = self.tanh_va(x)
+        return x
+class RespBertCNN(nn.Module):
+    def __init__(self, config):
+        super(RespBertCNN, self).__init__()
+        self.output = config['output_size']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"])
+    
+        self.d_model = self.wav_model.config.hidden_size       
+        
+        self.features = config['hidden_units']
+
+        self.time_downsample = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),  
+            nn.GELU(), 
+            nn.Dropout(0.2),         
+        )
+        
+        self.time = nn.Linear(1499, self.output)
+        self.feature_downsample = nn.Linear(self.features, 1)
+        self.flatten = nn.Flatten()      
+        self.unfreeze_last_n_blocks(config['number_finetune'])
+
+        self.set_dropout(layers = 2 ,dropout=0.2)
+        
+    def set_dropout(self, dropout = 0.2, layers = 8):
+        num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers
+        for i in range(num_layers - layers, num_layers):
+                # Access the dropout layers within the transformer block
+            layer = self.wav_model.encoder.layers[i]  
+            layer.attention.dropout = dropout# Modify attention dropout
+            layer.dropout.p = dropout  # Modify hidden/output dropout    
+            
+    def freeze_conv_only(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x= self.wav_model(**input_values)[0]
+        x = x.permute(0, 2, 1)       
+        x = self.time_downsample(x)  
+        x = x.permute(0, 2, 1)     
+        x = self.feature_downsample(x)
+        x = self.flatten(x)
+        x = self.time(x)
+        return x
+
+
+class HuBertAttention_12_OG_Model(nn.Module):
+    def __init__(self, config):
+        super(HuBertAttention_12_OG_Model, self).__init__()
+        self.output = config['output_size']
+                
+        self.features = config['hidden_units']
+        
+        self.wav_model = AutoModel.from_pretrained(config["model_name"],attn_implementation="flash_attention_2")
+        self.d_model = self.wav_model.config.hidden_size       
+
+        # Transformer Encoder with Layer Normalization and Residual Connections
+        self.transformer_layer = TransformerEncoderLayer(
+            d_model=self.d_model, 
+            nhead=16, 
+            dropout=0.2, 
+        )
+        self.transformer_encoder = TransformerEncoder(self.transformer_layer, num_layers=2)
+        #self.wav_model.encoder.layers = self.wav_model.encoder.layers[:12]
+
+
+        self.time_downsample = nn.Sequential(
+            nn.Conv1d(self.d_model, self.d_model, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.d_model),  
+            nn.GELU(),
+            nn.Dropout(0.2),
+
+            nn.Conv1d(self.d_model, self.features, kernel_size=3, padding=1),
+            nn.BatchNorm1d(self.features),  
+            nn.GELU(), 
+            nn.Dropout(0.2),       
+            nn.AdaptiveAvgPool1d(self.output),
+  
+        )
+        self.feature_downsample = nn.Linear(self.features, 1)
+        
+
+        #self.time = None
+        self.tanh_va = nn.Tanh()
+        self.flatten = nn.Flatten()      
+        #self.init_weights()
+        self.unfreeze_last_n_blocks(12)
+
+        self.set_dropout(layers = 8 ,dropout=0.2)
+        #self.wav_model.gradient_checkpointing_enable()
+        
+    def set_dropout(self, dropout = 0.2, layers = 8):
+        num_layers = len(self.wav_model.encoder.layers)  # Total number of transformer layers
+        for i in range(num_layers - layers, num_layers):
+                # Access the dropout layers within the transformer block
+            layer = self.wav_model.encoder.layers[i]  
+            layer.attention.dropout = dropout# Modify attention dropout
+            layer.dropout.p = dropout  # Modify hidden/output dropout    
+            
+    def freeze_conv_only(self):
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_last_n_blocks(self, num_blocks: int) :
+        for param in self.wav_model.parameters():
+            param.requires_grad = False
+
+        for i in range(0, num_blocks):
+            for param in self.wav_model.encoder.layers[-1 * (i + 1)].parameters():
+                param.requires_grad = True
+
+    def forward(self, input_values):
+        x= self.wav_model(**input_values)[0]
+        x = self.transformer_layer(x)     
+           
+        x = x.permute(0, 2, 1)       
+        x = self.time_downsample(x)  
+        x = x.permute(0, 2, 1)     
+        x = self.feature_downsample(x)
+        x = self.flatten(x)
+        x = self.tanh_va(x)
+        return x

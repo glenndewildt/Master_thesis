@@ -1,0 +1,4 @@
+,fold,model_path,test_loss,accuracy_original,accuracy_gaussian
+0,1.0,./pt_runs/Hubert-ft-30/best_model_fold1,0.18278398752212524,0.8013662586031037,0.8017634456423296
+average,1.0,,0.18278398752212524,0.8013662586031037,0.8017634456423296
+std_dev,,,,,

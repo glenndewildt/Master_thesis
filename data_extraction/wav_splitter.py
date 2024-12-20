@@ -193,7 +193,7 @@ def split_wav(path):
                     for i, time in enumerate(times_data):
                         if upper_belt_data[i] < -10:
                             print(upper_belt_data[i])
-                        data_to_save.append([wav_file, time, upper_belt_data[i]])
+                        data_to_save.append([wav_file, time,lower_belt_data[i], upper_belt_data[i]])
                     ##Create a subplot for each WAV file
 
                     #plt.tight_layout()
@@ -374,6 +374,7 @@ def create_output(path, output_csv='output.csv'):
                     print("Expected 3 files, but found:", len(wav_files))
                 else:
                     upper_belt_data = []
+                    lower_belt_data = []
                     times_data = []
                     wav_file = ""
                     for i, wav_file in enumerate(sorted(wav_files)):
@@ -403,12 +404,14 @@ def create_output(path, output_csv='output.csv'):
                             times_data = times.tolist()
                         elif i == 1:
                             upper_belt_data = normalized_data
+                        elif i == 2:
+                            lower_belt_data = normalized_data
 
                     for i, time in enumerate(times_data):
-                        data_to_save.append([wav_file, time, upper_belt_data[i]])
+                        data_to_save.append([wav_file, time,lower_belt_data[i], upper_belt_data[i]])
 
     # Convert the list to a DataFrame
-    df = pd.DataFrame(data_to_save, columns=['filename', 'timeFrame', 'upper_belt'])
+    df = pd.DataFrame(data_to_save, columns=['filename', 'timeFrame', 'lower_belt','upper_belt'])
 
     # Save the DataFrame to a CSV file
     df.to_csv(output_csv, index=False)
@@ -712,66 +715,66 @@ folder1 = home+'/ComParE2020_Breathing/wav'
 df = pd.DataFrame(data_to_save, columns=['filename', 'timeFrame', 'upper_belt'])
 
 
-folder2 = home+"/UCL_data/full_wav"
+#folder2 = home+"/UCL_data/full_wav"
 
 
 
 # Compare the wav files and get the results
 
 
-# results = [
-#     ("devel_00.wav", "speaker33_channel1_trial10.wav", 1.00),
-#     ("devel_01.wav", "speaker37_channel1_trial10.wav", 1.00),
-#     ("devel_02.wav", "speaker38_channel1_trial10.wav", 1.00),
-#     ("devel_03.wav", "speaker39_channel1_trial10.wav", 1.00),
-#     ("devel_04.wav", "speaker40_channel1_trial10.wav", 1.00),
-#     ("devel_05.wav", "speaker43_channel1_trial10.wav", 1.00),
-#     ("devel_06.wav", "speaker44_channel1_trial10.wav", 1.00),
-#     ("devel_07.wav", "speaker45_channel1_trial10.wav", 1.00),
-#     ("devel_08.wav", "speaker46_channel1_trial10.wav", 1.00),
-#     ("devel_09.wav", "speaker47_channel1_trial10.wav", 1.00),
-#     ("devel_10.wav", "speaker48_channel1_trial10.wav", 1.00),
-#     ("devel_11.wav", "speaker49_channel1_trial10.wav", 1.00),
-#     ("devel_12.wav", "speaker50_channel1_trial10.wav", 1.00),
-#     ("devel_13.wav", "speaker51_channel1_trial10.wav", 1.00),
-#     ("devel_14.wav", "speaker53_channel1_trial10.wav", 1.00),
-#     ("devel_15.wav", "speaker54_channel1_trial10.wav", 1.00),
-#     ("test_00.wav", "speaker12_channel1_trial10.wav", 1.00),
-#     ("test_01.wav", "speaker15_channel1_trial10.wav", 1.00),
-#     ("test_02.wav", "speaker16_channel1_trial10.wav", 1.00),
-#     ("test_03.wav", "speaker17_channel1_trial10.wav", 1.00),
-#     ("test_04.wav", "speaker24_channel1_trial10.wav", 1.00),
-#     ("test_05.wav", "speaker25_channel1_trial10.wav", 1.00),
-#     ("test_06.wav", "speaker26_channel1_trial10.wav", 1.00),
-#     ("test_07.wav", "speaker27_channel1_trial10.wav", 1.00),
-#     ("test_08.wav", "speaker28_channel1_trial10.wav", 1.00),
-#     ("test_09.wav", "speaker29_channel1_trial10.wav", 1.00),
-#     ("test_10.wav", "speaker30_channel1_trial10.wav", 1.00),
-#     ("test_11.wav", "speaker31_channel1_trial10.wav", 1.00),
-#     ("test_12.wav", "speaker32_channel1_trial10.wav", 1.00),
-#     ("test_13.wav", "speaker34_channel1_trial10.wav", 1.00),
-#     ("test_14.wav", "speaker35_channel1_trial10.wav", 1.00),
-#     ("test_15.wav", "speaker36_channel1_trial10.wav", 1.00),
-#     ("train_00.wav", "speaker1_channel1_trial10.wav", 1.00),
-#     ("train_01.wav", "speaker2_channel1_trial10.wav", 1.00),
-#     ("train_02.wav", "speaker3_channel1_trial10.wav", 1.00),
-#     ("train_03.wav", "speaker4_channel1_trial10.wav", 1.00),
-#     ("train_04.wav", "speaker5_channel1_trial10.wav", 1.00),
-#     ("train_05.wav", "speaker6_channel1_trial10.wav", 1.00),
-#     ("train_06.wav", "speaker7_channel1_trial10.wav", 1.00),
-#     ("train_07.wav", "speaker8_channel1_trial10.wav", 1.00),
-#     ("train_08.wav", "speaker9_channel1_trial10.wav", 1.00),
-#     ("train_09.wav", "speaker10_channel1_trial10.wav", 1.00),
-#     ("train_10.wav", "speaker11_channel1_trial10.wav", 1.00),
-#     ("train_11.wav", "speaker13_channel1_trial10.wav", 1.00),
-#     ("train_12.wav", "speaker14_channel1_trial10.wav", 1.00),
-#     ("train_13.wav", "speaker18_channel1_trial10.wav", 1.00),
-#     ("train_14.wav", "speaker19_channel1_trial10.wav", 1.00),
-#     ("train_15.wav", "speaker21_channel1_trial10.wav", 1.00),
-#     ("train_16.wav", "speaker22_channel1_trial10.wav", 1.00)
-# ]
+results = [
+    ("devel_00.wav", "speaker33_channel1_trial10.wav", 1.00),
+    ("devel_01.wav", "speaker37_channel1_trial10.wav", 1.00),
+    ("devel_02.wav", "speaker38_channel1_trial10.wav", 1.00),
+    ("devel_03.wav", "speaker39_channel1_trial10.wav", 1.00),
+    ("devel_04.wav", "speaker40_channel1_trial10.wav", 1.00),
+    ("devel_05.wav", "speaker43_channel1_trial10.wav", 1.00),
+    ("devel_06.wav", "speaker44_channel1_trial10.wav", 1.00),
+    ("devel_07.wav", "speaker45_channel1_trial10.wav", 1.00),
+    ("devel_08.wav", "speaker46_channel1_trial10.wav", 1.00),
+    ("devel_09.wav", "speaker47_channel1_trial10.wav", 1.00),
+    ("devel_10.wav", "speaker48_channel1_trial10.wav", 1.00),
+    ("devel_11.wav", "speaker49_channel1_trial10.wav", 1.00),
+    ("devel_12.wav", "speaker50_channel1_trial10.wav", 1.00),
+    ("devel_13.wav", "speaker51_channel1_trial10.wav", 1.00),
+    ("devel_14.wav", "speaker53_channel1_trial10.wav", 1.00),
+    ("devel_15.wav", "speaker54_channel1_trial10.wav", 1.00),
+    ("test_00.wav", "speaker12_channel1_trial10.wav", 1.00),
+    ("test_01.wav", "speaker15_channel1_trial10.wav", 1.00),
+    ("test_02.wav", "speaker16_channel1_trial10.wav", 1.00),
+    ("test_03.wav", "speaker17_channel1_trial10.wav", 1.00),
+    ("test_04.wav", "speaker24_channel1_trial10.wav", 1.00),
+    ("test_05.wav", "speaker25_channel1_trial10.wav", 1.00),
+    ("test_06.wav", "speaker26_channel1_trial10.wav", 1.00),
+    ("test_07.wav", "speaker27_channel1_trial10.wav", 1.00),
+    ("test_08.wav", "speaker28_channel1_trial10.wav", 1.00),
+    ("test_09.wav", "speaker29_channel1_trial10.wav", 1.00),
+    ("test_10.wav", "speaker30_channel1_trial10.wav", 1.00),
+    ("test_11.wav", "speaker31_channel1_trial10.wav", 1.00),
+    ("test_12.wav", "speaker32_channel1_trial10.wav", 1.00),
+    ("test_13.wav", "speaker34_channel1_trial10.wav", 1.00),
+    ("test_14.wav", "speaker35_channel1_trial10.wav", 1.00),
+    ("test_15.wav", "speaker36_channel1_trial10.wav", 1.00),
+    ("train_00.wav", "speaker1_channel1_trial10.wav", 1.00),
+    ("train_01.wav", "speaker2_channel1_trial10.wav", 1.00),
+    ("train_02.wav", "speaker3_channel1_trial10.wav", 1.00),
+    ("train_03.wav", "speaker4_channel1_trial10.wav", 1.00),
+    ("train_04.wav", "speaker5_channel1_trial10.wav", 1.00),
+    ("train_05.wav", "speaker6_channel1_trial10.wav", 1.00),
+    ("train_06.wav", "speaker7_channel1_trial10.wav", 1.00),
+    ("train_07.wav", "speaker8_channel1_trial10.wav", 1.00),
+    ("train_08.wav", "speaker9_channel1_trial10.wav", 1.00),
+    ("train_09.wav", "speaker10_channel1_trial10.wav", 1.00),
+    ("train_10.wav", "speaker11_channel1_trial10.wav", 1.00),
+    ("train_11.wav", "speaker13_channel1_trial10.wav", 1.00),
+    ("train_12.wav", "speaker14_channel1_trial10.wav", 1.00),
+    ("train_13.wav", "speaker18_channel1_trial10.wav", 1.00),
+    ("train_14.wav", "speaker19_channel1_trial10.wav", 1.00),
+    ("train_15.wav", "speaker21_channel1_trial10.wav", 1.00),
+    ("train_16.wav", "speaker22_channel1_trial10.wav", 1.00)
+]
 
-results = compare_wav_files(folder1, folder2)
+#results = compare_wav_files(folder1, folder2)
 
 
 # Print the results
